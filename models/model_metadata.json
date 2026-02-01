@@ -1,0 +1,14 @@
+{
+  "model_name": "Random Forest",
+  "metrics": {
+    "accuracy": 0.9980873445967485,
+    "f1_score": 0.0
+  },
+  "n_classes": 4,
+  "class_names": [
+    "BENIGN",
+    "Bot",
+    "DDoS",
+    "PortScan"
+  ]
+}

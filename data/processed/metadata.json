@@ -1,0 +1,13 @@
+{
+  "dataset": "CIC-IDS2017",
+  "n_features": 78,
+  "n_classes": 4,
+  "class_names": [
+    "BENIGN",
+    "Bot",
+    "DDoS",
+    "PortScan"
+  ],
+  "train_samples": 376437,
+  "test_samples": 94110
+}

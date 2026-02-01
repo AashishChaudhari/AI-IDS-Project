@@ -1,0 +1,15 @@
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.npy
+*.pkl
+*.keras
+data/raw/
+data/live_results.json
+reports/*.pdf
+docs/visualizations/*.png
+.DS_Store
+.idea/
+.vscode/
+*.swp

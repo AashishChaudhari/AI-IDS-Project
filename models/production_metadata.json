@@ -1,0 +1,13 @@
+{
+  "model_name": "Random Forest (CIC-IDS2017)",
+  "dataset": "CIC-IDS2017",
+  "accuracy": 0.9980873445967485,
+  "n_classes": 4,
+  "class_names": [
+    "BENIGN",
+    "Bot",
+    "DDoS",
+    "PortScan"
+  ],
+  "production_ready": true
+}
