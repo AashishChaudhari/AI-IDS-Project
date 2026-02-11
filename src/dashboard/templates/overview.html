@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en" data-bs-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI-IDS Dashboard - Overview</title>
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<style>
+:root {--bg-primary:#0f172a;--bg-card:#1e293b;--border-color:#334155;--text-primary:#e2e8f0;--text-secondary:#94a3b8;--accent-blue:#3b82f6;--accent-green:#22c55e;--accent-red:#ef4444;--accent-yellow:#facc15}
+body{background:var(--bg-primary);color:var(--text-primary);font-family:'Inter',sans-serif;min-height:100vh}
+.navbar{background:var(--bg-card)!important;border-bottom:2px solid var(--border-color);padding:1rem 2rem}
+.navbar-brand{font-size:1.5rem;font-weight:700;color:var(--accent-blue)!important}
+.nav-link{color:var(--text-secondary)!important;font-weight:500;margin:0 .5rem;transition:color .2s}
+.nav-link:hover,.nav-link.active{color:var(--accent-blue)!important}
+.status-badge{display:inline-flex;align-items:center;gap:.5rem;padding:.5rem 1rem;border-radius:.5rem;background:rgba(34,197,94,.1);border:1px solid rgba(34,197,94,.3)}
+.status-dot{width:8px;height:8px;border-radius:50%;background:var(--accent-green);animation:pulse 2s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}
+.kpi-card{background:var(--bg-card);border:1px solid var(--border-color);border-radius:1rem;padding:1.5rem;position:relative;overflow:hidden}
+.kpi-card::before{content:'';position:absolute;top:0;left:0;right:0;height:4px}
+.kpi-card.blue::before{background:var(--accent-blue)}
+.kpi-card.green::before{background:var(--accent-green)}
+.kpi-card.red::before{background:var(--accent-red)}
+.kpi-card.yellow::before{background:var(--accent-yellow)}
+.kpi-label{font-size:.75rem;text-transform:uppercase;letter-spacing:.05em;color:var(--text-secondary);margin-bottom:.5rem}
+.kpi-value{font-size:2.5rem;font-weight:700;margin-bottom:.25rem}
+.kpi-card.blue .kpi-value{color:var(--accent-blue)}
+.kpi-card.green .kpi-value{color:var(--accent-green)}
+.kpi-card.red .kpi-value{color:var(--accent-red)}
+.kpi-card.yellow .kpi-value{color:var(--accent-yellow)}
+.kpi-change{font-size:.875rem;color:var(--text-secondary)}
+.chart-card{background:var(--bg-card);border:1px solid var(--border-color);border-radius:1rem;padding:1.5rem}
+.card-header-custom{display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;padding-bottom:1rem;border-bottom:1px solid var(--border-color)}
+.card-title{font-size:1.125rem;font-weight:600;margin:0}
+.alert-item{background:var(--bg-card);border-left:4px solid;padding:1rem;margin-bottom:.75rem;border-radius:.5rem;transition:transform .2s}
+.alert-item:hover{transform:translateX(4px)}
+.alert-item.critical{border-color:#dc2626;background:rgba(220,38,38,.05)}
+.alert-item.high{border-color:#ef4444;background:rgba(239,68,68,.05)}
+.alert-item.medium{border-color:#f59e0b;background:rgba(245,158,11,.05)}
+.alert-item.low{border-color:#22c55e;background:rgba(34,197,94,.05)}
+.badge-attack{padding:.375rem .75rem;border-radius:.375rem;font-size:.75rem;font-weight:600}
+.badge-ddos{background:rgba(239,68,68,.2);color:#ef4444}
+.badge-portscan{background:rgba(245,158,11,.2);color:#f59e0b}
+.badge-bot{background:rgba(168,85,247,.2);color:#a855f7}
+</style>
+</head>
+<body>
+<nav class="navbar navbar-expand-lg">
+<div class="container-fluid">
+<a class="navbar-brand" href="/"><i class="fas fa-shield-alt"></i> AI-IDS Professional</a>
+<div class="collapse navbar-collapse">
+<ul class="navbar-nav me-auto">
+<li class="nav-item"><a class="nav-link active" href="/"><i class="fas fa-home"></i> Overview</a></li>
+<li class="nav-item"><a class="nav-link" href="/alerts"><i class="fas fa-bell"></i> Alerts</a></li>
+<li class="nav-item"><a class="nav-link" href="/analytics"><i class="fas fa-chart-line"></i> Analytics</a></li>
+<li class="nav-item"><a class="nav-link" href="/settings"><i class="fas fa-cog"></i> System</a></li>
+</ul>
+<div class="status-badge"><span class="status-dot"></span><span>System Running</span></div>
+<span class="text-secondary ms-3" id="lastUpdate">Updated: --:--:--</span>
+</div>
+</div>
+</nav>
+<div class="container-fluid p-4">
+<div class="row g-4 mb-4">
+<div class="col-md-3"><div class="kpi-card blue"><div class="kpi-label"><i class="fas fa-network-wired"></i> Total Packets</div><div class="kpi-value" id="totalPackets">0</div><div class="kpi-change">Since monitoring started</div></div></div>
+<div class="col-md-3"><div class="kpi-card red"><div class="kpi-label"><i class="fas fa-exclamation-triangle"></i> Attacks Detected</div><div class="kpi-value" id="attacksDetected">0</div><div class="kpi-change" id="attackRate">0/min avg</div></div></div>
+<div class="col-md-3"><div class="kpi-card yellow"><div class="kpi-label"><i class="fas fa-shield-alt"></i> Threat Level</div><div class="kpi-value" id="threatLevel">LOW</div><div class="kpi-change">Current assessment</div></div></div>
+<div class="col-md-3"><div class="kpi-card green"><div class="kpi-label"><i class="fas fa-check-circle"></i> Model Accuracy</div><div class="kpi-value">99.8%</div><div class="kpi-change">CIC-IDS2017 tested</div></div></div>
+</div>
+<div class="row g-4 mb-4">
+<div class="col-lg-8"><div class="chart-card"><div class="card-header-custom"><h5 class="card-title"><i class="fas fa-chart-line"></i> Real-Time Traffic Monitor</h5><span class="badge bg-primary">Live</span></div><canvas id="trafficChart" height="80"></canvas></div></div>
+<div class="col-lg-4"><div class="chart-card"><div class="card-header-custom"><h5 class="card-title"><i class="fas fa-chart-pie"></i> Attack Distribution</h5></div><canvas id="distributionChart"></canvas></div></div>
+</div>
+<div class="row"><div class="col-12"><div class="chart-card"><div class="card-header-custom"><h5 class="card-title"><i class="fas fa-bell"></i> Recent Alerts</h5><a href="/alerts" class="btn btn-sm btn-outline-primary">View All</a></div><div id="recentAlerts"></div></div></div></div>
+</div>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+function updateTimestamp(){document.getElementById('lastUpdate').textContent='Updated: '+new Date().toLocaleTimeString()}
+setInterval(updateTimestamp,1000);updateTimestamp();
+const trafficCtx=document.getElementById('trafficChart').getContext('2d');
+const distCtx=document.getElementById('distributionChart').getContext('2d');
+const trafficChart=new Chart(trafficCtx,{type:'line',data:{labels:[],datasets:[{label:'Normal Traffic',data:[],borderColor:'#22c55e',backgroundColor:'rgba(34,197,94,0.1)',tension:0.4,fill:true},{label:'Attacks',data:[],borderColor:'#ef4444',backgroundColor:'rgba(239,68,68,0.1)',tension:0.4,fill:true}]},options:{responsive:true,maintainAspectRatio:true,plugins:{legend:{display:true,labels:{color:'#94a3b8'}}},scales:{y:{ticks:{color:'#64748b'},grid:{color:'#1e293b'}},x:{ticks:{color:'#64748b'},grid:{color:'#1e293b'}}}}});
+const distChart=new Chart(distCtx,{type:'doughnut',data:{labels:['DDoS','PortScan','Bot'],datasets:[{data:[0,0,0],backgroundColor:['#ef4444','#f59e0b','#a855f7']}]},options:{responsive:true,maintainAspectRatio:true,plugins:{legend:{position:'bottom',labels:{color:'#cbd5e1',padding:15}}}}});
+async function updateDashboard(){try{const res=await fetch('/api/dashboard');const data=await res.json();document.getElementById('totalPackets').textContent=data.total_packets.toLocaleString();document.getElementById('attacksDetected').textContent=data.attacks_detected;document.getElementById('attackRate').textContent=data.attack_rate+'/min avg';document.getElementById('threatLevel').textContent=data.threat_level;const tlCard=document.querySelector('.kpi-card.yellow');tlCard.className='kpi-card';if(data.threat_level==='CRITICAL'||data.threat_level==='HIGH')tlCard.classList.add('red');else if(data.threat_level==='MEDIUM')tlCard.classList.add('yellow');else tlCard.classList.add('green');trafficChart.data.labels=data.traffic_labels;trafficChart.data.datasets[0].data=data.traffic_normal;trafficChart.data.datasets[1].data=data.traffic_attacks;trafficChart.update();distChart.data.datasets[0].data=[data.ddos_count,data.portscan_count,data.bot_count];distChart.update();const alertsDiv=document.getElementById('recentAlerts');if(data.recent_alerts.length===0){alertsDiv.innerHTML='<p class="text-center text-secondary py-4">No recent attacks detected</p>'}else{alertsDiv.innerHTML=data.recent_alerts.slice(0,5).map(a=>`<div class="alert-item ${a.severity}"><div class="d-flex justify-content-between align-items-start"><div><span class="badge-attack badge-${a.label.toLowerCase()}">${a.label}</span><span class="ms-2 text-secondary">${a.time}</span></div><span class="badge bg-secondary">${a.confidence}% confidence</span></div><div class="mt-2 text-secondary small"><i class="fas fa-bullseye"></i> Port ${a.port} | <i class="fas fa-cube"></i> ${a.packets} packets</div></div>`).join('')}}catch(e){console.error(e)}}
+setInterval(updateDashboard,3000);updateDashboard();
+</script>
+</body>
+</html>

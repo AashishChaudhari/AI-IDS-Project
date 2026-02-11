@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en" data-bs-theme="dark">
+<head>
+<meta charset="UTF-8">
+<title>AI-IDS Dashboard - Alerts</title>
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+<link rel="stylesheet" href="https://cdn.datatables.net/1.13.7/css/dataTables.bootstrap5.min.css">
+<style>
+:root{--bg-primary:#0f172a;--bg-card:#1e293b;--border-color:#334155;--text-primary:#e2e8f0;--text-secondary:#94a3b8;--accent-blue:#3b82f6}
+body{background:var(--bg-primary);color:var(--text-primary);font-family:'Inter',sans-serif;min-height:100vh}
+.navbar{background:var(--bg-card)!important;border-bottom:2px solid var(--border-color);padding:1rem 2rem}
+.navbar-brand{font-size:1.5rem;font-weight:700;color:var(--accent-blue)!important}
+.nav-link{color:var(--text-secondary)!important;font-weight:500;margin:0 .5rem}
+.nav-link:hover,.nav-link.active{color:var(--accent-blue)!important}
+.chart-card{background:var(--bg-card);border:1px solid var(--border-color);border-radius:1rem;padding:1.5rem}
+.card-header-custom{display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;padding-bottom:1rem;border-bottom:1px solid var(--border-color)}
+.table-dark{--bs-table-bg:var(--bg-card);--bs-table-border-color:var(--border-color)}
+.btn-export{background:var(--accent-blue);color:white;border:none;padding:.625rem 1.25rem;border-radius:.5rem;font-weight:600}
+.badge-ddos{background:rgba(239,68,68,.2);color:#ef4444}
+.badge-portscan{background:rgba(245,158,11,.2);color:#f59e0b}
+.badge-bot{background:rgba(168,85,247,.2);color:#a855f7}
+</style>
+</head>
+<body>
+<nav class="navbar navbar-expand-lg">
+<div class="container-fluid">
+<a class="navbar-brand" href="/"><i class="fas fa-shield-alt"></i> AI-IDS Professional</a>
+<ul class="navbar-nav me-auto">
+<li class="nav-item"><a class="nav-link" href="/"><i class="fas fa-home"></i> Overview</a></li>
+<li class="nav-item"><a class="nav-link active" href="/alerts"><i class="fas fa-bell"></i> Alerts</a></li>
+<li class="nav-item"><a class="nav-link" href="/analytics"><i class="fas fa-chart-line"></i> Analytics</a></li>
+<li class="nav-item"><a class="nav-link" href="/settings"><i class="fas fa-cog"></i> System</a></li>
+</ul>
+</div>
+</nav>
+<div class="container-fluid p-4">
+<div class="row mb-4"><div class="col-12"><h2><i class="fas fa-bell"></i> Alert Management</h2><p class="text-secondary">Comprehensive view of all detected threats</p></div></div>
+<div class="row"><div class="col-12"><div class="chart-card">
+<div class="card-header-custom"><h5 class="card-title">All Alerts</h5><button class="btn-export" onclick="exportAlerts()"><i class="fas fa-download"></i> Export CSV</button></div>
+<table id="alertsTable" class="table table-dark table-striped">
+<thead><tr><th>Time</th><th>Source</th><th>Attack Type</th><th>Confidence</th><th>Severity</th><th>Port</th><th>Packets</th></tr></thead>
+<tbody></tbody>
+</table>
+</div></div></div>
+</div>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+<script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
+<script src="https://cdn.datatables.net/1.13.7/js/jquery.dataTables.min.js"></script>
+<script src="https://cdn.datatables.net/1.13.7/js/dataTables.bootstrap5.min.js"></script>
+<script>
+let alertsTable;
+async function loadAlerts(){const res=await fetch('/api/all_alerts');const alerts=await res.json();if(alertsTable)alertsTable.destroy();const tbody=document.querySelector('#alertsTable tbody');tbody.innerHTML=alerts.map(a=>`<tr><td>${a.time}</td><td>192.168.68.145</td><td><span class="badge-ddos badge-${a.label.toLowerCase()}">${a.label}</span></td><td>${a.confidence}%</td><td><span class="badge bg-${a.severity_color}">${a.severity}</span></td><td>${a.port}</td><td>${a.packets}</td></tr>`).join('');alertsTable=$('#alertsTable').DataTable({order:[[0,'desc']],pageLength:25})}
+function exportAlerts(){fetch('/api/export_alerts_csv').then(r=>r.blob()).then(blob=>{const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='ids_alerts_'+new Date().toISOString().slice(0,10)+'.csv';a.click()})}
+loadAlerts();setInterval(loadAlerts,10000);
+</script>
+</body>
+</html>

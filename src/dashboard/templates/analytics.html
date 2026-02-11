@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en" data-bs-theme="dark">
+<head>
+<meta charset="UTF-8">
+<title>AI-IDS Dashboard - Analytics</title>
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<style>
+:root{--bg-primary:#0f172a;--bg-card:#1e293b;--border-color:#334155;--text-primary:#e2e8f0;--text-secondary:#94a3b8;--accent-blue:#3b82f6;--accent-green:#22c55e}
+body{background:var(--bg-primary);color:var(--text-primary);font-family:'Inter',sans-serif;min-height:100vh}
+.navbar{background:var(--bg-card)!important;border-bottom:2px solid var(--border-color);padding:1rem 2rem}
+.navbar-brand{font-size:1.5rem;font-weight:700;color:var(--accent-blue)!important}
+.nav-link{color:var(--text-secondary)!important;font-weight:500;margin:0 .5rem}
+.nav-link:hover,.nav-link.active{color:var(--accent-blue)!important}
+.kpi-card{background:var(--bg-card);border:1px solid var(--border-color);border-radius:1rem;padding:1.5rem;position:relative;overflow:hidden}
+.kpi-card::before{content:'';position:absolute;top:0;left:0;right:0;height:4px}
+.kpi-card.green::before{background:var(--accent-green)}
+.kpi-card.blue::before{background:var(--accent-blue)}
+.kpi-card.yellow::before{background:#facc15}
+.kpi-label{font-size:.75rem;text-transform:uppercase;letter-spacing:.05em;color:var(--text-secondary);margin-bottom:.5rem}
+.kpi-value{font-size:2.5rem;font-weight:700;margin-bottom:.25rem}
+.kpi-card.green .kpi-value{color:var(--accent-green)}
+.kpi-card.blue .kpi-value{color:var(--accent-blue)}
+.kpi-card.yellow .kpi-value{color:#facc15}
+.kpi-change{font-size:.875rem;color:var(--text-secondary)}
+.chart-card{background:var(--bg-card);border:1px solid var(--border-color);border-radius:1rem;padding:1.5rem}
+.table-dark{--bs-table-bg:var(--bg-card);--bs-table-border-color:var(--border-color)}
+</style>
+</head>
+<body>
+<nav class="navbar navbar-expand-lg">
+<div class="container-fluid">
+<a class="navbar-brand" href="/"><i class="fas fa-shield-alt"></i> AI-IDS Professional</a>
+<ul class="navbar-nav me-auto">
+<li class="nav-item"><a class="nav-link" href="/"><i class="fas fa-home"></i> Overview</a></li>
+<li class="nav-item"><a class="nav-link" href="/alerts"><i class="fas fa-bell"></i> Alerts</a></li>
+<li class="nav-item"><a class="nav-link active" href="/analytics"><i class="fas fa-chart-line"></i> Analytics</a></li>
+<li class="nav-item"><a class="nav-link" href="/settings"><i class="fas fa-cog"></i> System</a></li>
+</ul>
+</div>
+</nav>
+<div class="container-fluid p-4">
+<div class="row mb-4"><div class="col-12"><h2><i class="fas fa-chart-line"></i> Model Analytics</h2><p class="text-secondary">Performance metrics and visualization</p></div></div>
+<div class="row g-4 mb-4">
+<div class="col-md-3"><div class="kpi-card green"><div class="kpi-label">Overall Accuracy</div><div class="kpi-value">99.81%</div><div class="kpi-change">94,110 test samples</div></div></div>
+<div class="col-md-3"><div class="kpi-card blue"><div class="kpi-label">Precision</div><div class="kpi-value">99.82%</div><div class="kpi-change">Weighted average</div></div></div>
+<div class="col-md-3"><div class="kpi-card blue"><div class="kpi-label">Recall</div><div class="kpi-value">99.81%</div><div class="kpi-change">Weighted average</div></div></div>
+<div class="col-md-3"><div class="kpi-card yellow"><div class="kpi-label">False Positive Rate</div><div class="kpi-value">0.19%</div><div class="kpi-change">179 / 94,110</div></div></div>
+</div>
+<div class="row g-4">
+<div class="col-lg-6"><div class="chart-card"><h5>Confusion Matrix</h5><canvas id="confusionMatrix" height="300"></canvas></div></div>
+<div class="col-lg-6"><div class="chart-card"><h5>Per-Class Performance</h5>
+<table class="table table-dark"><thead><tr><th>Class</th><th>Precision</th><th>Recall</th><th>F1-Score</th></tr></thead>
+<tbody><tr><td>BENIGN</td><td>1.00</td><td>1.00</td><td>1.00</td></tr><tr><td>DDoS</td><td>1.00</td><td>1.00</td><td>1.00</td></tr>
+<tr><td>PortScan</td><td>1.00</td><td>1.00</td><td>1.00</td></tr><tr><td>Bot</td><td>0.49</td><td>0.96</td><td>0.65</td></tr></tbody></table>
+<p class="small text-secondary mt-3"><i class="fas fa-info-circle"></i> Bot class shows lower precision due to extreme imbalance (0.2% of dataset).</p>
+</div></div>
+</div>
+</div>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+const cmCtx=document.getElementById('confusionMatrix').getContext('2d');
+new Chart(cmCtx,{type:'bar',data:{labels:['BENIGN','DDoS','PortScan','Bot'],datasets:[{label:'True Positives',data:[73832,10315,9584,364],backgroundColor:'#22c55e'},{label:'False Positives',data:[0,0,0,379],backgroundColor:'#ef4444'}]},options:{responsive:true,scales:{y:{ticks:{color:'#64748b'},grid:{color:'#1e293b'}},x:{ticks:{color:'#64748b'},grid:{color:'#1e293b'}}},plugins:{legend:{labels:{color:'#94a3b8'}}}}});
+</script>
+</body>
+</html>

@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en" data-bs-theme="dark">
+<head>
+<meta charset="UTF-8">
+<title>AI-IDS Dashboard - System</title>
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+<style>
+:root{--bg-primary:#0f172a;--bg-card:#1e293b;--border-color:#334155;--text-primary:#e2e8f0;--text-secondary:#94a3b8;--accent-blue:#3b82f6}
+body{background:var(--bg-primary);color:var(--text-primary);font-family:'Inter',sans-serif;min-height:100vh}
+.navbar{background:var(--bg-card)!important;border-bottom:2px solid var(--border-color);padding:1rem 2rem}
+.navbar-brand{font-size:1.5rem;font-weight:700;color:var(--accent-blue)!important}
+.nav-link{color:var(--text-secondary)!important;font-weight:500;margin:0 .5rem}
+.nav-link:hover,.nav-link.active{color:var(--accent-blue)!important}
+.chart-card{background:var(--bg-card);border:1px solid var(--border-color);border-radius:1rem;padding:1.5rem}
+.table-dark{--bs-table-bg:var(--bg-card);--bs-table-border-color:var(--border-color)}
+.progress{height:8px;border-radius:4px;background:var(--bg-primary)}
+</style>
+</head>
+<body>
+<nav class="navbar navbar-expand-lg">
+<div class="container-fluid">
+<a class="navbar-brand" href="/"><i class="fas fa-shield-alt"></i> AI-IDS Professional</a>
+<ul class="navbar-nav me-auto">
+<li class="nav-item"><a class="nav-link" href="/"><i class="fas fa-home"></i> Overview</a></li>
+<li class="nav-item"><a class="nav-link" href="/alerts"><i class="fas fa-bell"></i> Alerts</a></li>
+<li class="nav-item"><a class="nav-link" href="/analytics"><i class="fas fa-chart-line"></i> Analytics</a></li>
+<li class="nav-item"><a class="nav-link active" href="/settings"><i class="fas fa-cog"></i> System</a></li>
+</ul>
+</div>
+</nav>
+<div class="container-fluid p-4">
+<div class="row mb-4"><div class="col-12"><h2><i class="fas fa-cog"></i> System Status</h2><p class="text-secondary">Monitor system health and configuration</p></div></div>
+<div class="row g-4">
+<div class="col-lg-6"><div class="chart-card"><h5 class="mb-3"><i class="fas fa-microchip"></i> System Resources</h5>
+<div class="mb-4"><label class="mb-2">CPU Usage</label><div class="progress"><div class="progress-bar bg-info" id="cpuBar" style="width:0%"></div></div><small class="text-secondary" id="cpuText">0%</small></div>
+<div class="mb-4"><label class="mb-2">Memory Usage</label><div class="progress"><div class="progress-bar bg-warning" id="memBar" style="width:0%"></div></div><small class="text-secondary" id="memText">0%</small></div>
+<div><label class="mb-2">Disk Usage</label><div class="progress"><div class="progress-bar bg-success" id="diskBar" style="width:0%"></div></div><small class="text-secondary" id="diskText">0%</small></div>
+</div></div>
+<div class="col-lg-6"><div class="chart-card"><h5 class="mb-3"><i class="fas fa-info-circle"></i> Configuration</h5>
+<table class="table table-dark table-sm">
+<tr><td>Model Type</td><td class="text-end">Random Forest</td></tr>
+<tr><td>Model Version</td><td class="text-end">1.0</td></tr>
+<tr><td>Dataset</td><td class="text-end">CIC-IDS2017</td></tr>
+<tr><td>Training Samples</td><td class="text-end">376,437</td></tr>
+<tr><td>Detection Mode</td><td class="text-end">Hybrid (ML + Rate)</td></tr>
+<tr><td>Interface</td><td class="text-end">eth0</td></tr>
+<tr><td>Uptime</td><td class="text-end" id="uptime">0m</td></tr>
+</table>
+</div></div>
+</div>
+</div>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+async function updateSystemStats(){const res=await fetch('/api/system_stats');const data=await res.json();document.getElementById('cpuBar').style.width=data.cpu+'%';document.getElementById('cpuText').textContent=data.cpu+'%';document.getElementById('memBar').style.width=data.memory+'%';document.getElementById('memText').textContent=data.memory+'%';document.getElementById('diskBar').style.width=data.disk+'%';document.getElementById('diskText').textContent=data.disk+'%';document.getElementById('uptime').textContent=data.uptime}
+setInterval(updateSystemStats,2000);updateSystemStats();
+</script>
+</body>
+</html>

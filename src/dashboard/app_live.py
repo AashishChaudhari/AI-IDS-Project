@@ -1,655 +1,437 @@
 #!/usr/bin/env python3
-"""
-AI-IDS SIEM Dashboard - Real-time attack monitoring with live charts
-Only displays attacks, filters out benign traffic
-"""
-import json, os, time
+"""AI-IDS Professional SIEM Dashboard"""
+import json, os, time, psutil, sys
 from pathlib import Path
 from datetime import datetime, timedelta
-from collections import Counter, deque
-
-from flask import Flask, jsonify, render_template_string, request, send_from_directory
-
-import matplotlib
-matplotlib.use('Agg')
-import matplotlib.pyplot as plt
-from reportlab.lib.pagesizes import letter
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.lib.colors import HexColor
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image
-from reportlab.lib.units import inch
+from flask import Flask, jsonify, send_from_directory, Response
 
 app = Flask(__name__)
 
-BASE_DIR    = Path('/home/aashish/AI-IDS-Project')
+BASE_DIR = Path('/home/aashish/AI-IDS-Project')
 SHARED_FILE = BASE_DIR / 'data' / 'live_results.json'
 REPORTS_DIR = BASE_DIR / 'reports'
 REPORTS_DIR.mkdir(exist_ok=True)
+START_TIME = time.time()
 
 def read_shared():
-    """Read latest data from the shared JSON file"""
     try:
         with open(SHARED_FILE, 'r') as f:
             return json.load(f)
     except:
         return {"traffic": [], "alerts": []}
 
-# ─── PDF REPORT (same as before) ─────────────────────────
-def generate_pdf_report():
+def get_threat_level():
     data = read_shared()
     alerts = data.get("alerts", [])
-    total = len(alerts)
+    if not alerts:
+        return "LOW", "#22c55e"
+    now = datetime.now()
+    recent = [a for a in alerts if (now - datetime.fromisoformat(a['timestamp'])).seconds < 300]
+    if len(recent) > 20:
+        return "CRITICAL", "#dc2626"
+    elif len(recent) > 10:
+        return "HIGH", "#ef4444"
+    elif len(recent) > 5:
+        return "MEDIUM", "#f59e0b"
+    return "LOW", "#22c55e"
 
-    filename = f"IDS_Report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
-    filepath = REPORTS_DIR / filename
-
-    # Pie chart
-    chart_path = REPORTS_DIR / '_chart.png'
-    if alerts:
-        counts = Counter(e['label'] for e in alerts)
-        fig, ax = plt.subplots(figsize=(5, 3))
-        colors = {'DDoS': '#ef4444', 'PortScan': '#f59e0b', 'Bot': '#8b5cf6'}
-        ax.pie(counts.values(), labels=counts.keys(), autopct='%1.1f%%', startangle=90,
-               colors=[colors.get(k, '#64748b') for k in counts.keys()])
-        ax.set_title("Attack Distribution")
-        fig.savefig(chart_path, dpi=100, bbox_inches='tight')
-        plt.close(fig)
-    else:
-        # Empty chart
-        fig, ax = plt.subplots(figsize=(5, 3))
-        ax.text(0.5, 0.5, 'No Attacks Detected', ha='center', va='center', fontsize=14)
-        ax.axis('off')
-        fig.savefig(chart_path, dpi=100, bbox_inches='tight')
-        plt.close(fig)
-
-    doc = SimpleDocTemplate(str(filepath), pagesize=letter, topMargin=0.5*inch, bottomMargin=0.5*inch)
-    styles = getSampleStyleSheet()
-    title_style   = ParagraphStyle('T', parent=styles['Title'], textColor=HexColor('#1a5276'), fontSize=22)
-    heading_style = ParagraphStyle('H', parent=styles['Heading2'], textColor=HexColor('#2e86c1'))
-    story = []
-
-    story.append(Paragraph("AI-Powered Intrusion Detection System", title_style))
-    story.append(Paragraph(f"Report: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", styles['Normal']))
-    story.append(Spacer(1, 12))
-
-    story.append(Paragraph("Attack Summary", heading_style))
-    summary = [
-        ["Metric", "Value"],
-        ["Total Attacks Detected", str(total)],
-        ["Model Accuracy", "99.81%"],
-        ["Dataset", "CIC-IDS2017"],
-    ]
-    t = Table(summary, colWidths=[3*inch, 3*inch])
-    t.setStyle(TableStyle([
-        ('BACKGROUND',(0,0),(-1,0), HexColor('#2e86c1')),
-        ('TEXTCOLOR',(0,0),(-1,0), HexColor('#ffffff')),
-        ('FONTNAME',(0,0),(-1,0),'Helvetica-Bold'),
-        ('FONTSIZE',(0,0),(-1,-1),11),
-        ('BACKGROUND',(0,1),(-1,-1), HexColor('#eaf2f8')),
-        ('GRID',(0,0),(-1,-1),0.5, HexColor('#aed6f1')),
-        ('TOPPADDING',(0,0),(-1,-1),6),
-        ('BOTTOMPADDING',(0,0),(-1,-1),6),
-    ]))
-    story.append(t)
-    story.append(Spacer(1, 18))
-
-    story.append(Paragraph("Attack Distribution", heading_style))
-    story.append(Image(str(chart_path), width=4*inch, height=2.4*inch))
-    story.append(Spacer(1, 18))
-
-    story.append(Paragraph("Recent Attacks", heading_style))
-    alert_rows = [["Time", "Attack Type", "Confidence", "Dst Port"]]
-    for a in alerts[-20:]:
-        alert_rows.append([
-            datetime.fromisoformat(a['timestamp']).strftime('%H:%M:%S'),
-            a['label'],
-            f"{a['confidence']}%",
-            str(a.get('dst_port', '—'))
-        ])
-    if len(alert_rows) == 1:
-        alert_rows.append(["—", "No attacks detected", "—", "—"])
-
-    t2 = Table(alert_rows, colWidths=[1.5*inch, 2*inch, 1.5*inch, 1*inch])
-    t2.setStyle(TableStyle([
-        ('BACKGROUND',(0,0),(-1,0), HexColor('#e74c3c')),
-        ('TEXTCOLOR',(0,0),(-1,0), HexColor('#ffffff')),
-        ('FONTNAME',(0,0),(-1,0),'Helvetica-Bold'),
-        ('FONTSIZE',(0,0),(-1,-1),10),
-        ('BACKGROUND',(0,1),(-1,-1), HexColor('#fadbd8')),
-        ('GRID',(0,0),(-1,-1),0.5, HexColor('#e74c3c')),
-        ('TOPPADDING',(0,0),(-1,-1),5),
-        ('BOTTOMPADDING',(0,0),(-1,-1),5),
-    ]))
-    story.append(t2)
-
-    doc.build(story)
-    chart_path.unlink(missing_ok=True)
-    return filename
-
-# ─── DASHBOARD HTML ──────────────────────────────────────
-DASHBOARD_HTML = """
-<!DOCTYPE html>
-<html lang="en">
+# HTML Templates
+OVERVIEW_HTML = '''<!DOCTYPE html>
+<html lang="en" data-bs-theme="dark">
 <head>
 <meta charset="UTF-8">
-<title>AI-IDS SIEM Dashboard</title>
+<title>AI-IDS Dashboard</title>
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+<link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <style>
-  * { margin:0; padding:0; box-sizing:border-box; }
-  body { font-family:'Inter','Segoe UI',sans-serif; background:#0a0e1a; color:#e2e8f0; min-height:100vh; }
-  
-  header {
-    background:linear-gradient(135deg,#1e293b,#0f172a);
-    border-bottom:2px solid #334155;
-    padding:16px 32px;
-    display:flex;
-    align-items:center;
-    justify-content:space-between;
-  }
-  header h1 { font-size:1.5rem; color:#38bdf8; font-weight:700; }
-  .status { display:flex; align-items:center; gap:12px; }
-  .status-dot {
-    width:12px; height:12px;
-    background:#22c55e;
-    border-radius:50%;
-    box-shadow:0 0 10px #22c55e;
-    animation:pulse 2s infinite;
-  }
-  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
-  .status-text { font-size:0.85rem; color:#94a3b8; font-weight:500; }
-
-  .container { max-width:1600px; margin:24px auto; padding:0 24px; }
-
-  /* Top Stats Cards */
-  .stats-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:20px; margin-bottom:24px; }
-  .stat-card {
-    background:linear-gradient(145deg, #1e293b, #0f172a);
-    border:1px solid #334155;
-    border-radius:16px;
-    padding:24px;
-    position:relative;
-    overflow:hidden;
-  }
-  .stat-card::before {
-    content:'';
-    position:absolute;
-    top:0; left:0;
-    width:100%; height:4px;
-  }
-  .stat-card.red::before { background:#ef4444; }
-  .stat-card.amber::before { background:#f59e0b; }
-  .stat-card.blue::before { background:#38bdf8; }
-  .stat-card.purple::before { background:#a855f7; }
-  
-  .stat-label { font-size:0.75rem; text-transform:uppercase; letter-spacing:1.5px; color:#64748b; margin-bottom:8px; font-weight:600; }
-  .stat-value { font-size:2.2rem; font-weight:800; margin-bottom:4px; }
-  .stat-card.red .stat-value { color:#ef4444; }
-  .stat-card.amber .stat-value { color:#f59e0b; }
-  .stat-card.blue .stat-value { color:#38bdf8; }
-  .stat-card.purple .stat-value { color:#a855f7; }
-  .stat-change { font-size:0.7rem; color:#64748b; }
-
-  /* Main Grid Layout */
-  .main-grid { display:grid; grid-template-columns:1fr 1fr; gap:20px; margin-bottom:20px; }
-  .main-grid-full { display:grid; grid-template-columns:1fr; gap:20px; margin-bottom:20px; }
-  
-  .panel {
-    background:linear-gradient(145deg, #1e293b, #0f172a);
-    border:1px solid #334155;
-    border-radius:16px;
-    overflow:hidden;
-    box-shadow:0 4px 6px rgba(0,0,0,0.3);
-  }
-  .panel-header {
-    padding:16px 24px;
-    border-bottom:1px solid #334155;
-    display:flex;
-    justify-content:space-between;
-    align-items:center;
-    background:rgba(15,23,42,0.6);
-  }
-  .panel-title { font-size:0.9rem; font-weight:700; color:#cbd5e1; text-transform:uppercase; letter-spacing:1px; }
-  .panel-body { padding:24px; }
-
-  /* Charts */
-  .chart-container { position:relative; height:300px; }
-
-  /* Attack Feed */
-  .attack-feed { max-height:400px; overflow-y:auto; }
-  .attack-feed::-webkit-scrollbar { width:6px; }
-  .attack-feed::-webkit-scrollbar-track { background:#0f172a; }
-  .attack-feed::-webkit-scrollbar-thumb { background:#334155; border-radius:3px; }
-  
-  .attack-item {
-    padding:16px;
-    border-left:4px solid;
-    margin-bottom:12px;
-    border-radius:8px;
-    background:rgba(30,41,59,0.5);
-    transition:all 0.2s;
-  }
-  .attack-item:hover { background:rgba(30,41,59,0.8); transform:translateX(4px); }
-  .attack-item.ddos { border-color:#ef4444; }
-  .attack-item.portscan { border-color:#f59e0b; }
-  .attack-item.bot { border-color:#a855f7; }
-  
-  .attack-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; }
-  .attack-type { font-weight:700; font-size:0.95rem; }
-  .attack-item.ddos .attack-type { color:#ef4444; }
-  .attack-item.portscan .attack-type { color:#f59e0b; }
-  .attack-item.bot .attack-type { color:#a855f7; }
-  
-  .attack-time { font-size:0.75rem; color:#64748b; }
-  .attack-details { font-size:0.8rem; color:#94a3b8; display:flex; gap:16px; }
-  .attack-detail { display:flex; align-items:center; gap:6px; }
-  
-  .no-attacks {
-    text-align:center;
-    padding:60px 20px;
-    color:#64748b;
-    font-size:0.9rem;
-  }
-  .no-attacks-icon { font-size:3rem; margin-bottom:12px; opacity:0.3; }
-
-  /* Buttons */
-  .btn {
-    padding:10px 20px;
-    border:none;
-    border-radius:8px;
-    cursor:pointer;
-    font-size:0.85rem;
-    font-weight:600;
-    text-transform:uppercase;
-    letter-spacing:0.5px;
-    transition:all 0.2s;
-  }
-  .btn-primary { background:#2563eb; color:#fff; }
-  .btn-primary:hover { background:#1d4ed8; transform:translateY(-2px); box-shadow:0 4px 12px rgba(37,99,235,0.4); }
-
-  /* Top Attacked Ports */
-  .port-list { list-style:none; }
-  .port-item {
-    display:flex;
-    justify-content:space-between;
-    padding:12px 0;
-    border-bottom:1px solid #1e293b;
-  }
-  .port-item:last-child { border-bottom:none; }
-  .port-name { font-weight:600; color:#cbd5e1; }
-  .port-count { color:#64748b; font-size:0.85rem; }
-
-  /* Attack Timeline Table */
-  .timeline-table { width:100%; border-collapse:collapse; font-size:0.85rem; }
-  .timeline-table th {
-    text-align:left;
-    padding:12px;
-    background:rgba(15,23,42,0.6);
-    color:#64748b;
-    font-weight:600;
-    text-transform:uppercase;
-    font-size:0.75rem;
-    letter-spacing:1px;
-  }
-  .timeline-table td {
-    padding:12px;
-    border-bottom:1px solid #1e293b;
-  }
-  .timeline-table tr:hover { background:rgba(30,41,59,0.3); }
-  
-  .badge {
-    display:inline-block;
-    padding:4px 10px;
-    border-radius:6px;
-    font-size:0.75rem;
-    font-weight:600;
-    text-transform:uppercase;
-  }
-  .badge-ddos { background:rgba(239,68,68,0.2); color:#ef4444; }
-  .badge-portscan { background:rgba(245,158,11,0.2); color:#f59e0b; }
-  .badge-bot { background:rgba(168,85,247,0.2); color:#a855f7; }
+:root{--bg-primary:#0f172a;--bg-card:#1e293b;--border-color:#334155;--text-primary:#e2e8f0;--text-secondary:#94a3b8;--accent-blue:#3b82f6;--accent-green:#22c55e;--accent-red:#ef4444;--accent-yellow:#facc15}
+body{background:var(--bg-primary);color:var(--text-primary);font-family:'Inter',sans-serif;min-height:100vh}
+.navbar{background:var(--bg-card)!important;border-bottom:2px solid var(--border-color);padding:1rem 2rem}
+.navbar-brand{font-size:1.5rem;font-weight:700;color:var(--accent-blue)!important}
+.nav-link{color:var(--text-secondary)!important;font-weight:500;margin:0 .5rem;transition:color .2s}
+.nav-link:hover,.nav-link.active{color:var(--accent-blue)!important}
+.status-badge{display:inline-flex;align-items:center;gap:.5rem;padding:.5rem 1rem;border-radius:.5rem;background:rgba(34,197,94,.1);border:1px solid rgba(34,197,94,.3)}
+.status-dot{width:8px;height:8px;border-radius:50%;background:var(--accent-green);animation:pulse 2s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}
+.kpi-card{background:var(--bg-card);border:1px solid var(--border-color);border-radius:1rem;padding:1.5rem;position:relative;overflow:hidden}
+.kpi-card::before{content:'';position:absolute;top:0;left:0;right:0;height:4px}
+.kpi-card.blue::before{background:var(--accent-blue)}
+.kpi-card.green::before{background:var(--accent-green)}
+.kpi-card.red::before{background:var(--accent-red)}
+.kpi-card.yellow::before{background:var(--accent-yellow)}
+.kpi-label{font-size:.75rem;text-transform:uppercase;letter-spacing:.05em;color:var(--text-secondary);margin-bottom:.5rem}
+.kpi-value{font-size:2.5rem;font-weight:700;margin-bottom:.25rem}
+.kpi-card.blue .kpi-value{color:var(--accent-blue)}
+.kpi-card.green .kpi-value{color:var(--accent-green)}
+.kpi-card.red .kpi-value{color:var(--accent-red)}
+.kpi-card.yellow .kpi-value{color:var(--accent-yellow)}
+.kpi-change{font-size:.875rem;color:var(--text-secondary)}
+.chart-card{background:var(--bg-card);border:1px solid var(--border-color);border-radius:1rem;padding:1.5rem}
+.card-header-custom{display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;padding-bottom:1rem;border-bottom:1px solid var(--border-color)}
+.card-title{font-size:1.125rem;font-weight:600;margin:0}
+.alert-item{background:var(--bg-card);border-left:4px solid;padding:1rem;margin-bottom:.75rem;border-radius:.5rem;transition:transform .2s}
+.alert-item:hover{transform:translateX(4px)}
+.alert-item.critical{border-color:#dc2626;background:rgba(220,38,38,.05)}
+.alert-item.high{border-color:#ef4444;background:rgba(239,68,68,.05)}
+.alert-item.medium{border-color:#f59e0b;background:rgba(245,158,11,.05)}
+.alert-item.low{border-color:#22c55e;background:rgba(34,197,94,.05)}
+.badge-attack{padding:.375rem .75rem;border-radius:.375rem;font-size:.75rem;font-weight:600}
+.badge-ddos{background:rgba(239,68,68,.2);color:#ef4444}
+.badge-portscan{background:rgba(245,158,11,.2);color:#f59e0b}
+.badge-bot{background:rgba(168,85,247,.2);color:#a855f7}
+.btn-pdf{background:#dc2626;color:white;border:none;padding:.625rem 1.25rem;border-radius:.5rem;font-weight:600;transition:all .2s;cursor:pointer}
+.btn-pdf:hover{background:#b91c1c;transform:translateY(-2px);box-shadow:0 4px 12px rgba(220,38,38,.4)}
+.btn-pdf:disabled{opacity:.5;cursor:not-allowed}
 </style>
 </head>
 <body>
-<header>
-  <h1>🛡️ AI-IDS SIEM Dashboard</h1>
-  <div class="status">
-    <span class="status-dot"></span>
-    <span class="status-text">LIVE MONITORING</span>
-  </div>
-</header>
-
-<div class="container">
-  <!-- Top Stats -->
-  <div class="stats-grid">
-    <div class="stat-card red">
-      <div class="stat-label">Total Attacks</div>
-      <div class="stat-value" id="statTotal">0</div>
-      <div class="stat-change">Since monitoring started</div>
-    </div>
-    <div class="stat-card amber">
-      <div class="stat-label">Attacks/Min</div>
-      <div class="stat-value" id="statRate">0</div>
-      <div class="stat-change">Average rate</div>
-    </div>
-    <div class="stat-card blue">
-      <div class="stat-label">DDoS Attacks</div>
-      <div class="stat-value" id="statDDoS">0</div>
-      <div class="stat-change">Distributed denial of service</div>
-    </div>
-    <div class="stat-card purple">
-      <div class="stat-label">Port Scans</div>
-      <div class="stat-value" id="statPortScan">0</div>
-      <div class="stat-change">Reconnaissance attempts</div>
-    </div>
-  </div>
-
-  <!-- Charts Row -->
-  <div class="main-grid">
-    <div class="panel">
-      <div class="panel-header">
-        <span class="panel-title">Attack Timeline (Last Hour)</span>
-      </div>
-      <div class="panel-body">
-        <div class="chart-container">
-          <canvas id="timelineChart"></canvas>
-        </div>
-      </div>
-    </div>
-    <div class="panel">
-      <div class="panel-header">
-        <span class="panel-title">Attack Distribution</span>
-      </div>
-      <div class="panel-body">
-        <div class="chart-container">
-          <canvas id="pieChart"></canvas>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <!-- Live Feed and Top Ports -->
-  <div class="main-grid">
-    <div class="panel">
-      <div class="panel-header">
-        <span class="panel-title">🚨 Live Attack Feed</span>
-        <button class="btn btn-primary" onclick="generateReport()">📄 Export PDF</button>
-      </div>
-      <div class="panel-body">
-        <div class="attack-feed" id="attackFeed">
-          <div class="no-attacks">
-            <div class="no-attacks-icon">🛡️</div>
-            <div>Waiting for attacks...</div>
-          </div>
-        </div>
-      </div>
-    </div>
-    <div class="panel">
-      <div class="panel-header">
-        <span class="panel-title">Top Attacked Ports</span>
-      </div>
-      <div class="panel-body">
-        <ul class="port-list" id="portList">
-          <li class="port-item"><span class="port-name">No data yet</span><span class="port-count">—</span></li>
-        </ul>
-      </div>
-    </div>
-  </div>
-
-  <!-- Attack Timeline Table -->
-  <div class="main-grid-full">
-    <div class="panel">
-      <div class="panel-header">
-        <span class="panel-title">Recent Attack Timeline</span>
-      </div>
-      <div class="panel-body">
-        <table class="timeline-table">
-          <thead>
-            <tr>
-              <th>Time</th>
-              <th>Attack Type</th>
-              <th>Confidence</th>
-              <th>Destination Port</th>
-              <th>Packets</th>
-              <th>Duration</th>
-            </tr>
-          </thead>
-          <tbody id="timelineTable">
-            <tr><td colspan="6" style="text-align:center;color:#64748b;padding:40px;">No attacks detected</td></tr>
-          </tbody>
-        </table>
-      </div>
-    </div>
-  </div>
+<nav class="navbar navbar-expand-lg">
+<div class="container-fluid">
+<a class="navbar-brand" href="/"><i class="fas fa-shield-alt"></i> AI-IDS Professional</a>
+<div class="collapse navbar-collapse">
+<ul class="navbar-nav me-auto">
+<li class="nav-item"><a class="nav-link active" href="/"><i class="fas fa-home"></i> Overview</a></li>
+<li class="nav-item"><a class="nav-link" href="/alerts"><i class="fas fa-bell"></i> Alerts</a></li>
+<li class="nav-item"><a class="nav-link" href="/analytics"><i class="fas fa-chart-line"></i> Analytics</a></li>
+<li class="nav-item"><a class="nav-link" href="/settings"><i class="fas fa-cog"></i> System</a></li>
+</ul>
+<button class="btn-pdf me-3" onclick="generateReport()" id="pdfBtn">
+<i class="fas fa-file-pdf"></i> Export PDF Report
+</button>
+<div class="status-badge"><span class="status-dot"></span><span>Live</span></div>
+<span class="text-secondary ms-3" id="lastUpdate">--:--:--</span>
 </div>
-
+</div>
+</nav>
+<div class="container-fluid p-4">
+<div class="row g-4 mb-4">
+<div class="col-md-3"><div class="kpi-card blue"><div class="kpi-label"><i class="fas fa-network-wired"></i> Total Packets</div><div class="kpi-value" id="totalPackets">0</div><div class="kpi-change">Since monitoring started</div></div></div>
+<div class="col-md-3"><div class="kpi-card red"><div class="kpi-label"><i class="fas fa-exclamation-triangle"></i> Attacks Detected</div><div class="kpi-value" id="attacksDetected">0</div><div class="kpi-change" id="attackRate">0/min avg</div></div></div>
+<div class="col-md-3"><div class="kpi-card yellow"><div class="kpi-label"><i class="fas fa-shield-alt"></i> Threat Level</div><div class="kpi-value" id="threatLevel">LOW</div><div class="kpi-change">Current assessment</div></div></div>
+<div class="col-md-3"><div class="kpi-card green"><div class="kpi-label"><i class="fas fa-check-circle"></i> Model Accuracy</div><div class="kpi-value">99.8%</div><div class="kpi-change">CIC-IDS2017 tested</div></div></div>
+</div>
+<div class="row g-4 mb-4">
+<div class="col-lg-8"><div class="chart-card"><div class="card-header-custom"><h5 class="card-title"><i class="fas fa-chart-line"></i> Real-Time Traffic Monitor</h5><span class="badge bg-primary">Live</span></div><canvas id="trafficChart" height="80"></canvas></div></div>
+<div class="col-lg-4"><div class="chart-card"><div class="card-header-custom"><h5 class="card-title"><i class="fas fa-chart-pie"></i> Attack Distribution</h5></div><canvas id="distributionChart"></canvas></div></div>
+</div>
+<div class="row"><div class="col-12"><div class="chart-card"><div class="card-header-custom"><h5 class="card-title"><i class="fas fa-bell"></i> Recent Alerts</h5><a href="/alerts" class="btn btn-sm btn-outline-primary">View All</a></div><div id="recentAlerts"></div></div></div></div>
+</div>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
 <script>
-// ─── CHARTS SETUP ────────────────────────────────────────
-const timelineCtx = document.getElementById('timelineChart').getContext('2d');
-const pieCtx = document.getElementById('pieChart').getContext('2d');
-
-const timelineChart = new Chart(timelineCtx, {
-  type: 'line',
-  data: {
-    labels: [],
-    datasets: [{
-      label: 'Attacks per Minute',
-      data: [],
-      borderColor: '#ef4444',
-      backgroundColor: 'rgba(239,68,68,0.1)',
-      tension: 0.4,
-      fill: true
-    }]
-  },
-  options: {
-    responsive: true,
-    maintainAspectRatio: false,
-    plugins: {
-      legend: { display: false },
-      tooltip: { mode: 'index', intersect: false }
-    },
-    scales: {
-      y: { 
-        beginAtZero: true,
-        ticks: { color: '#64748b' },
-        grid: { color: '#1e293b' }
-      },
-      x: {
-        ticks: { color: '#64748b' },
-        grid: { color: '#1e293b' }
-      }
-    }
-  }
-});
-
-const pieChart = new Chart(pieCtx, {
-  type: 'doughnut',
-  data: {
-    labels: ['DDoS', 'PortScan', 'Bot'],
-    datasets: [{
-      data: [0, 0, 0],
-      backgroundColor: ['#ef4444', '#f59e0b', '#a855f7']
-    }]
-  },
-  options: {
-    responsive: true,
-    maintainAspectRatio: false,
-    plugins: {
-      legend: { 
-        position: 'bottom',
-        labels: { color: '#cbd5e1', padding: 20 }
-      }
-    }
-  }
-});
-
-// ─── DATA POLLING ────────────────────────────────────────
-async function updateDashboard() {
-  try {
-    const res = await fetch('/api/alerts');
-    const alerts = await res.json();
-    
-    if (!alerts.length) return;
-
-    // Stats
-    const total = alerts.length;
-    const ddos = alerts.filter(a => a.label === 'DDoS').length;
-    const portscan = alerts.filter(a => a.label === 'PortScan').length;
-    const bot = alerts.filter(a => a.label === 'Bot').length;
-    
-    // Calculate rate (attacks per minute)
-    if (alerts.length > 1) {
-      const first = new Date(alerts[0].timestamp);
-      const last = new Date(alerts[alerts.length-1].timestamp);
-      const minutes = (last - first) / 60000;
-      const rate = minutes > 0 ? (total / minutes).toFixed(1) : 0;
-      document.getElementById('statRate').textContent = rate;
-    }
-
-    document.getElementById('statTotal').textContent = total;
-    document.getElementById('statDDoS').textContent = ddos;
-    document.getElementById('statPortScan').textContent = portscan;
-
-    // Update timeline chart (last hour, grouped by minute)
-    updateTimelineChart(alerts);
-
-    // Update pie chart
-    pieChart.data.datasets[0].data = [ddos, portscan, bot];
-    pieChart.update();
-
-    // Update attack feed (last 10)
-    updateAttackFeed(alerts.slice(-10).reverse());
-
-    // Update timeline table (last 15)
-    updateTimelineTable(alerts.slice(-15).reverse());
-
-    // Update top ports
-    updateTopPorts(alerts);
-
-  } catch(e) { console.error(e); }
-}
-
-function updateTimelineChart(alerts) {
-  // Group by minute for last hour
-  const now = new Date();
-  const oneHourAgo = new Date(now - 60*60*1000);
-  const minuteBuckets = {};
-  
-  for (let i = 0; i < 60; i++) {
-    const time = new Date(oneHourAgo.getTime() + i * 60000);
-    const label = time.toLocaleTimeString('en-US', {hour:'2-digit', minute:'2-digit'});
-    minuteBuckets[label] = 0;
-  }
-
-  alerts.forEach(a => {
-    const time = new Date(a.timestamp);
-    if (time >= oneHourAgo) {
-      const label = time.toLocaleTimeString('en-US', {hour:'2-digit', minute:'2-digit'});
-      if (minuteBuckets[label] !== undefined) minuteBuckets[label]++;
-    }
-  });
-
-  timelineChart.data.labels = Object.keys(minuteBuckets);
-  timelineChart.data.datasets[0].data = Object.values(minuteBuckets);
-  timelineChart.update();
-}
-
-function updateAttackFeed(alerts) {
-  const feed = document.getElementById('attackFeed');
-  if (!alerts.length) {
-    feed.innerHTML = '<div class="no-attacks"><div class="no-attacks-icon">🛡️</div><div>Waiting for attacks...</div></div>';
-    return;
-  }
-
-  feed.innerHTML = alerts.map(a => {
-    const type = a.label.toLowerCase().replace(' ','');
-    const time = new Date(a.timestamp).toLocaleTimeString();
-    return `<div class="attack-item ${type}">
-      <div class="attack-header">
-        <span class="attack-type">⚠ ${a.label}</span>
-        <span class="attack-time">${time}</span>
-      </div>
-      <div class="attack-details">
-        <span class="attack-detail">🎯 Confidence: ${a.confidence}%</span>
-        <span class="attack-detail">🔌 Port: ${a.dst_port}</span>
-        <span class="attack-detail">📦 Packets: ${a.fwd_pkts + a.bwd_pkts}</span>
-      </div>
-    </div>`;
-  }).join('');
-}
-
-function updateTimelineTable(alerts) {
-  const tbody = document.getElementById('timelineTable');
-  if (!alerts.length) {
-    tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:#64748b;padding:40px;">No attacks detected</td></tr>';
-    return;
-  }
-
-  tbody.innerHTML = alerts.map(a => {
-    const badgeClass = a.label.toLowerCase().replace(' ','');
-    return `<tr>
-      <td>${new Date(a.timestamp).toLocaleTimeString()}</td>
-      <td><span class="badge badge-${badgeClass}">${a.label}</span></td>
-      <td>${a.confidence}%</td>
-      <td>${a.dst_port}</td>
-      <td>${a.fwd_pkts + a.bwd_pkts}</td>
-      <td>${a.duration}s</td>
-    </tr>`;
-  }).join('');
-}
-
-function updateTopPorts(alerts) {
-  const ports = {};
-  alerts.forEach(a => {
-    const port = a.dst_port || 'Unknown';
-    ports[port] = (ports[port] || 0) + 1;
-  });
-
-  const sorted = Object.entries(ports).sort((a,b) => b[1] - a[1]).slice(0,5);
-  const list = document.getElementById('portList');
-  
-  if (!sorted.length) {
-    list.innerHTML = '<li class="port-item"><span class="port-name">No data yet</span><span class="port-count">—</span></li>';
-    return;
-  }
-
-  list.innerHTML = sorted.map(([port, count]) => 
-    `<li class="port-item"><span class="port-name">Port ${port}</span><span class="port-count">${count} attacks</span></li>`
-  ).join('');
-}
-
-async function generateReport() {
-  const res = await fetch('/api/generate_report', {method:'POST'});
-  const data = await res.json();
-  if (data.filename) {
-    const a = document.createElement('a');
-    a.href = '/reports/' + data.filename;
-    a.download = data.filename;
-    a.click();
-  }
-}
-
-// Poll every 2 seconds
-setInterval(updateDashboard, 2000);
-updateDashboard();
+function updateTimestamp(){document.getElementById('lastUpdate').textContent=new Date().toLocaleTimeString()}
+setInterval(updateTimestamp,1000);updateTimestamp();
+const trafficCtx=document.getElementById('trafficChart').getContext('2d');
+const distCtx=document.getElementById('distributionChart').getContext('2d');
+const trafficChart=new Chart(trafficCtx,{type:'line',data:{labels:[],datasets:[{label:'Normal',data:[],borderColor:'#22c55e',backgroundColor:'rgba(34,197,94,0.1)',tension:0.4,fill:true},{label:'Attacks',data:[],borderColor:'#ef4444',backgroundColor:'rgba(239,68,68,0.1)',tension:0.4,fill:true}]},options:{responsive:true,maintainAspectRatio:true,plugins:{legend:{display:true,labels:{color:'#94a3b8'}}},scales:{y:{ticks:{color:'#64748b'},grid:{color:'#1e293b'}},x:{ticks:{color:'#64748b'},grid:{color:'#1e293b'}}}}});
+const distChart=new Chart(distCtx,{type:'doughnut',data:{labels:['DDoS','PortScan','Bot'],datasets:[{data:[0,0,0],backgroundColor:['#ef4444','#f59e0b','#a855f7']}]},options:{responsive:true,maintainAspectRatio:true,plugins:{legend:{position:'bottom',labels:{color:'#cbd5e1',padding:15}}}}});
+async function updateDashboard(){try{const res=await fetch('/api/dashboard');const data=await res.json();document.getElementById('totalPackets').textContent=data.total_packets.toLocaleString();document.getElementById('attacksDetected').textContent=data.attacks_detected;document.getElementById('attackRate').textContent=data.attack_rate+'/min avg';document.getElementById('threatLevel').textContent=data.threat_level;const tlCard=document.querySelector('.kpi-card.yellow');tlCard.className='kpi-card';if(data.threat_level==='CRITICAL'||data.threat_level==='HIGH')tlCard.classList.add('red');else if(data.threat_level==='MEDIUM')tlCard.classList.add('yellow');else tlCard.classList.add('green');trafficChart.data.labels=data.traffic_labels;trafficChart.data.datasets[0].data=data.traffic_normal;trafficChart.data.datasets[1].data=data.traffic_attacks;trafficChart.update();distChart.data.datasets[0].data=[data.ddos_count,data.portscan_count,data.bot_count];distChart.update();const alertsDiv=document.getElementById('recentAlerts');if(data.recent_alerts.length===0){alertsDiv.innerHTML='<p class="text-center text-secondary py-4">No attacks detected</p>'}else{alertsDiv.innerHTML=data.recent_alerts.slice(0,5).map(a=>`<div class="alert-item ${a.severity}"><div class="d-flex justify-content-between align-items-start"><div><span class="badge-attack badge-${a.label.toLowerCase()}">${a.label}</span><span class="ms-2 text-secondary">${a.time}</span></div><span class="badge bg-secondary">${a.confidence}%</span></div><div class="mt-2 text-secondary small"><i class="fas fa-bullseye"></i> Port ${a.port} | <i class="fas fa-cube"></i> ${a.packets} pkts</div></div>`).join('')}}catch(e){console.error(e)}}
+async function generateReport(){const btn=document.getElementById('pdfBtn');btn.disabled=true;btn.innerHTML='<i class="fas fa-spinner fa-spin"></i> Generating...';try{const res=await fetch('/api/generate_report',{method:'POST'});const data=await res.json();if(data.filename){const a=document.createElement('a');a.href='/reports/'+data.filename;a.download=data.filename;a.click();btn.innerHTML='<i class="fas fa-check"></i> Downloaded!';setTimeout(()=>{btn.innerHTML='<i class="fas fa-file-pdf"></i> Export PDF Report';btn.disabled=false},3000)}}catch(e){console.error(e);btn.innerHTML='<i class="fas fa-times"></i> Error';setTimeout(()=>{btn.innerHTML='<i class="fas fa-file-pdf"></i> Export PDF Report';btn.disabled=false},3000)}}
+setInterval(updateDashboard,3000);updateDashboard();
 </script>
 </body>
-</html>
-"""
+</html>'''
 
-# ─── ROUTES ───────────────────────────────────────────────
+ALERTS_HTML = '''<!DOCTYPE html>
+<html lang="en" data-bs-theme="dark">
+<head>
+<meta charset="UTF-8">
+<title>AI-IDS - Alerts</title>
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+<link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" rel="stylesheet">
+<link href="https://cdn.datatables.net/1.13.7/css/dataTables.bootstrap5.min.css" rel="stylesheet">
+<style>
+:root{--bg-primary:#0f172a;--bg-card:#1e293b;--border-color:#334155;--text-primary:#e2e8f0;--text-secondary:#94a3b8;--accent-blue:#3b82f6}
+body{background:var(--bg-primary);color:var(--text-primary);font-family:'Inter',sans-serif}
+.navbar{background:var(--bg-card)!important;border-bottom:2px solid var(--border-color);padding:1rem 2rem}
+.navbar-brand{font-size:1.5rem;font-weight:700;color:var(--accent-blue)!important}
+.nav-link{color:var(--text-secondary)!important;font-weight:500;margin:0 .5rem}
+.nav-link:hover,.nav-link.active{color:var(--accent-blue)!important}
+.chart-card{background:var(--bg-card);border:1px solid var(--border-color);border-radius:1rem;padding:1.5rem}
+.card-header-custom{display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;padding-bottom:1rem;border-bottom:1px solid var(--border-color)}
+.table-dark{--bs-table-bg:var(--bg-card);--bs-table-border-color:var(--border-color)}
+.btn-export{background:var(--accent-blue);color:white;border:none;padding:.625rem 1.25rem;border-radius:.5rem;font-weight:600}
+.badge-ddos{background:rgba(239,68,68,.2);color:#ef4444;padding:.375rem .75rem;border-radius:.375rem;font-size:.75rem;font-weight:600}
+.badge-portscan{background:rgba(245,158,11,.2);color:#f59e0b;padding:.375rem .75rem;border-radius:.375rem;font-size:.75rem;font-weight:600}
+.badge-bot{background:rgba(168,85,247,.2);color:#a855f7;padding:.375rem .75rem;border-radius:.375rem;font-size:.75rem;font-weight:600}
+</style>
+</head>
+<body>
+<nav class="navbar navbar-expand-lg">
+<div class="container-fluid">
+<a class="navbar-brand" href="/"><i class="fas fa-shield-alt"></i> AI-IDS Professional</a>
+<ul class="navbar-nav me-auto">
+<li class="nav-item"><a class="nav-link" href="/"><i class="fas fa-home"></i> Overview</a></li>
+<li class="nav-item"><a class="nav-link active" href="/alerts"><i class="fas fa-bell"></i> Alerts</a></li>
+<li class="nav-item"><a class="nav-link" href="/analytics"><i class="fas fa-chart-line"></i> Analytics</a></li>
+<li class="nav-item"><a class="nav-link" href="/settings"><i class="fas fa-cog"></i> System</a></li>
+</ul>
+</div>
+</nav>
+<div class="container-fluid p-4">
+<div class="row mb-4"><div class="col-12"><h2><i class="fas fa-bell"></i> Alert Management</h2><p class="text-secondary">Comprehensive view of all detected threats</p></div></div>
+<div class="row"><div class="col-12"><div class="chart-card">
+<div class="card-header-custom"><h5 class="card-title">All Alerts</h5><button class="btn-export" onclick="exportCSV()"><i class="fas fa-download"></i> Export CSV</button></div>
+<table id="alertsTable" class="table table-dark table-striped">
+<thead><tr><th>Time</th><th>Source</th><th>Type</th><th>Confidence</th><th>Severity</th><th>Port</th><th>Packets</th></tr></thead>
+<tbody></tbody>
+</table>
+</div></div></div>
+</div>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+<script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
+<script src="https://cdn.datatables.net/1.13.7/js/jquery.dataTables.min.js"></script>
+<script src="https://cdn.datatables.net/1.13.7/js/dataTables.bootstrap5.min.js"></script>
+<script>
+let tbl;
+async function load(){const r=await fetch('/api/all_alerts');const a=await r.json();if(tbl)tbl.destroy();document.querySelector('#alertsTable tbody').innerHTML=a.map(x=>`<tr><td>${x.time}</td><td>192.168.68.145</td><td><span class="badge-${x.label.toLowerCase()}">${x.label}</span></td><td>${x.confidence}%</td><td><span class="badge bg-${x.severity_color}">${x.severity}</span></td><td>${x.port}</td><td>${x.packets}</td></tr>`).join('');tbl=$('#alertsTable').DataTable({order:[[0,'desc']],pageLength:25})}
+function exportCSV(){fetch('/api/export_alerts_csv').then(r=>r.blob()).then(b=>{const a=document.createElement('a');a.href=URL.createObjectURL(b);a.download='alerts.csv';a.click()})}
+load();setInterval(load,10000);
+</script>
+</body>
+</html>'''
+
+ANALYTICS_HTML = '''<!DOCTYPE html>
+<html lang="en" data-bs-theme="dark">
+<head>
+<meta charset="UTF-8">
+<title>AI-IDS - Analytics</title>
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+<link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<style>
+:root{--bg-primary:#0f172a;--bg-card:#1e293b;--border-color:#334155;--text-primary:#e2e8f0;--text-secondary:#94a3b8;--accent-blue:#3b82f6;--accent-green:#22c55e;--accent-yellow:#facc15}
+body{background:var(--bg-primary);color:var(--text-primary);font-family:'Inter',sans-serif;min-height:100vh}
+.navbar{background:var(--bg-card)!important;border-bottom:2px solid var(--border-color);padding:1rem 2rem}
+.navbar-brand{font-size:1.5rem;font-weight:700;color:var(--accent-blue)!important}
+.nav-link{color:var(--text-secondary)!important;font-weight:500;margin:0 .5rem}
+.nav-link:hover,.nav-link.active{color:var(--accent-blue)!important}
+.kpi-card{background:var(--bg-card);border:1px solid var(--border-color);border-radius:1rem;padding:1.5rem;position:relative;overflow:hidden}
+.kpi-card::before{content:'';position:absolute;top:0;left:0;right:0;height:4px}
+.kpi-card.green::before{background:var(--accent-green)}
+.kpi-card.blue::before{background:var(--accent-blue)}
+.kpi-card.yellow::before{background:var(--accent-yellow)}
+.kpi-label{font-size:.75rem;text-transform:uppercase;letter-spacing:.05em;color:var(--text-secondary);margin-bottom:.5rem}
+.kpi-value{font-size:2.5rem;font-weight:700;margin-bottom:.25rem}
+.kpi-card.green .kpi-value{color:var(--accent-green)}
+.kpi-card.blue .kpi-value{color:var(--accent-blue)}
+.kpi-card.yellow .kpi-value{color:var(--accent-yellow)}
+.kpi-change{font-size:.875rem;color:var(--text-secondary)}
+.chart-card{background:var(--bg-card);border:1px solid var(--border-color);border-radius:1rem;padding:1.5rem}
+.table-dark{--bs-table-bg:var(--bg-card);--bs-table-border-color:var(--border-color)}
+</style>
+</head>
+<body>
+<nav class="navbar navbar-expand-lg">
+<div class="container-fluid">
+<a class="navbar-brand" href="/"><i class="fas fa-shield-alt"></i> AI-IDS Professional</a>
+<ul class="navbar-nav me-auto">
+<li class="nav-item"><a class="nav-link" href="/"><i class="fas fa-home"></i> Overview</a></li>
+<li class="nav-item"><a class="nav-link" href="/alerts"><i class="fas fa-bell"></i> Alerts</a></li>
+<li class="nav-item"><a class="nav-link active" href="/analytics"><i class="fas fa-chart-line"></i> Analytics</a></li>
+<li class="nav-item"><a class="nav-link" href="/settings"><i class="fas fa-cog"></i> System</a></li>
+</ul>
+</div>
+</nav>
+<div class="container-fluid p-4">
+<div class="row mb-4"><div class="col-12"><h2><i class="fas fa-chart-line"></i> Model Analytics</h2><p class="text-secondary">Performance metrics and visualization</p></div></div>
+<div class="row g-4 mb-4">
+<div class="col-md-3"><div class="kpi-card green"><div class="kpi-label">Overall Accuracy</div><div class="kpi-value">99.81%</div><div class="kpi-change">94,110 test samples</div></div></div>
+<div class="col-md-3"><div class="kpi-card blue"><div class="kpi-label">Precision</div><div class="kpi-value">99.82%</div><div class="kpi-change">Weighted average</div></div></div>
+<div class="col-md-3"><div class="kpi-card blue"><div class="kpi-label">Recall</div><div class="kpi-value">99.81%</div><div class="kpi-change">Weighted average</div></div></div>
+<div class="col-md-3"><div class="kpi-card yellow"><div class="kpi-label">False Positive Rate</div><div class="kpi-value">0.19%</div><div class="kpi-change">179 / 94,110</div></div></div>
+</div>
+<div class="row g-4">
+<div class="col-lg-6"><div class="chart-card"><h5 class="mb-3">Confusion Matrix</h5><canvas id="confusionMatrix" height="300"></canvas></div></div>
+<div class="col-lg-6"><div class="chart-card"><h5 class="mb-3">Per-Class Performance</h5>
+<table class="table table-dark"><thead><tr><th>Class</th><th>Precision</th><th>Recall</th><th>F1-Score</th></tr></thead>
+<tbody><tr><td>BENIGN</td><td>1.00</td><td>1.00</td><td>1.00</td></tr><tr><td>DDoS</td><td>1.00</td><td>1.00</td><td>1.00</td></tr>
+<tr><td>PortScan</td><td>1.00</td><td>1.00</td><td>1.00</td></tr><tr><td>Bot</td><td>0.49</td><td>0.96</td><td>0.65</td></tr></tbody></table>
+<p class="small text-secondary mt-3"><i class="fas fa-info-circle"></i> Bot class shows lower precision due to extreme imbalance (0.2% of dataset). High recall ensures most bot activity is detected.</p>
+</div></div>
+</div>
+</div>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+const cmCtx=document.getElementById('confusionMatrix').getContext('2d');
+new Chart(cmCtx,{type:'bar',data:{labels:['BENIGN','DDoS','PortScan','Bot'],datasets:[{label:'True Positives',data:[73832,10315,9584,364],backgroundColor:'#22c55e'},{label:'False Positives',data:[0,0,0,379],backgroundColor:'#ef4444'}]},options:{responsive:true,scales:{y:{ticks:{color:'#64748b'},grid:{color:'#1e293b'}},x:{ticks:{color:'#64748b'},grid:{color:'#1e293b'}}},plugins:{legend:{labels:{color:'#94a3b8'}}}}});
+</script>
+</body>
+</html>'''
+
+SETTINGS_HTML = '''<!DOCTYPE html>
+<html lang="en" data-bs-theme="dark">
+<head>
+<meta charset="UTF-8">
+<title>AI-IDS - System</title>
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+<link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" rel="stylesheet">
+<style>
+:root{--bg-primary:#0f172a;--bg-card:#1e293b;--border-color:#334155;--text-primary:#e2e8f0;--text-secondary:#94a3b8;--accent-blue:#3b82f6}
+body{background:var(--bg-primary);color:var(--text-primary);font-family:'Inter',sans-serif;min-height:100vh}
+.navbar{background:var(--bg-card)!important;border-bottom:2px solid var(--border-color);padding:1rem 2rem}
+.navbar-brand{font-size:1.5rem;font-weight:700;color:var(--accent-blue)!important}
+.nav-link{color:var(--text-secondary)!important;font-weight:500;margin:0 .5rem}
+.nav-link:hover,.nav-link.active{color:var(--accent-blue)!important}
+.chart-card{background:var(--bg-card);border:1px solid var(--border-color);border-radius:1rem;padding:1.5rem}
+.table-dark{--bs-table-bg:var(--bg-card);--bs-table-border-color:var(--border-color)}
+.progress{height:10px;border-radius:5px;background:var(--bg-primary)}
+</style>
+</head>
+<body>
+<nav class="navbar navbar-expand-lg">
+<div class="container-fluid">
+<a class="navbar-brand" href="/"><i class="fas fa-shield-alt"></i> AI-IDS Professional</a>
+<ul class="navbar-nav me-auto">
+<li class="nav-item"><a class="nav-link" href="/"><i class="fas fa-home"></i> Overview</a></li>
+<li class="nav-item"><a class="nav-link" href="/alerts"><i class="fas fa-bell"></i> Alerts</a></li>
+<li class="nav-item"><a class="nav-link" href="/analytics"><i class="fas fa-chart-line"></i> Analytics</a></li>
+<li class="nav-item"><a class="nav-link active" href="/settings"><i class="fas fa-cog"></i> System</a></li>
+</ul>
+</div>
+</nav>
+<div class="container-fluid p-4">
+<div class="row mb-4"><div class="col-12"><h2><i class="fas fa-cog"></i> System Status</h2><p class="text-secondary">Monitor system health and configuration</p></div></div>
+<div class="row g-4">
+<div class="col-lg-6"><div class="chart-card"><h5 class="mb-3"><i class="fas fa-microchip"></i> System Resources</h5>
+<div class="mb-4"><label class="mb-2 fw-bold">CPU Usage</label><div class="progress"><div class="progress-bar bg-info" id="cpuBar" style="width:0%"></div></div><small class="text-secondary" id="cpuText">0%</small></div>
+<div class="mb-4"><label class="mb-2 fw-bold">Memory Usage</label><div class="progress"><div class="progress-bar bg-warning" id="memBar" style="width:0%"></div></div><small class="text-secondary" id="memText">0%</small></div>
+<div><label class="mb-2 fw-bold">Disk Usage</label><div class="progress"><div class="progress-bar bg-success" id="diskBar" style="width:0%"></div></div><small class="text-secondary" id="diskText">0%</small></div>
+</div></div>
+<div class="col-lg-6"><div class="chart-card"><h5 class="mb-3"><i class="fas fa-info-circle"></i> Configuration</h5>
+<table class="table table-dark table-sm">
+<tr><td><strong>Model Type</strong></td><td class="text-end">Random Forest</td></tr>
+<tr><td><strong>Model Version</strong></td><td class="text-end">1.0</td></tr>
+<tr><td><strong>Dataset</strong></td><td class="text-end">CIC-IDS2017</td></tr>
+<tr><td><strong>Training Samples</strong></td><td class="text-end">376,437</td></tr>
+<tr><td><strong>Test Accuracy</strong></td><td class="text-end">99.81%</td></tr>
+<tr><td><strong>Detection Mode</strong></td><td class="text-end">Hybrid (ML + Rate)</td></tr>
+<tr><td><strong>Network Interface</strong></td><td class="text-end">eth0</td></tr>
+<tr><td><strong>System Uptime</strong></td><td class="text-end" id="uptime">0m</td></tr>
+</table>
+</div></div>
+</div>
+</div>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+async function updateSystemStats(){const res=await fetch('/api/system_stats');const data=await res.json();document.getElementById('cpuBar').style.width=data.cpu+'%';document.getElementById('cpuText').textContent=data.cpu+'%';document.getElementById('memBar').style.width=data.memory+'%';document.getElementById('memText').textContent=data.memory+'%';document.getElementById('diskBar').style.width=data.disk+'%';document.getElementById('diskText').textContent=data.disk+'%';document.getElementById('uptime').textContent=data.uptime}
+setInterval(updateSystemStats,2000);updateSystemStats();
+</script>
+</body>
+</html>'''
+
+# Routes
 @app.route('/')
 def index():
-    return render_template_string(DASHBOARD_HTML)
+    return OVERVIEW_HTML
 
-@app.route('/api/alerts')
-def api_alerts():
+@app.route('/alerts')
+def alerts_page():
+    return ALERTS_HTML
+
+@app.route('/analytics')
+def analytics_page():
+    return ANALYTICS_HTML
+
+@app.route('/settings')
+def settings_page():
+    return SETTINGS_HTML
+
+@app.route('/api/dashboard')
+def api_dashboard():
     data = read_shared()
-    return jsonify(data.get("alerts", []))
+    alerts = data.get("alerts", [])
+    traffic = data.get("traffic", [])
+    total_packets = sum(t['fwd_pkts'] + t['bwd_pkts'] for t in traffic)
+    attacks = len(alerts)
+    if alerts:
+        first = datetime.fromisoformat(alerts[0]['timestamp'])
+        last = datetime.fromisoformat(alerts[-1]['timestamp'])
+        minutes = max((last - first).seconds / 60, 1)
+        rate = round(attacks / minutes, 1)
+    else:
+        rate = 0
+    level, color = get_threat_level()
+    now = datetime.now()
+    labels = [(now - timedelta(minutes=i)).strftime('%H:%M') for i in range(59, -1, -1)]
+    attack_counts = [0] * 60
+    normal_counts = [0] * 60
+    for t in traffic[-200:]:
+        ts = datetime.fromisoformat(t['timestamp'])
+        mins_ago = int((now - ts).seconds / 60)
+        if mins_ago < 60:
+            if t['is_attack']:
+                attack_counts[59 - mins_ago] += 1
+            else:
+                normal_counts[59 - mins_ago] += 1
+    ddos = sum(1 for a in alerts if a['label'] == 'DDoS')
+    portscan = sum(1 for a in alerts if a['label'] == 'PortScan')
+    bot = sum(1 for a in alerts if a['label'] == 'Bot')
+    recent = []
+    for a in alerts[-10:]:
+        conf = a['confidence']
+        if conf >= 95:
+            severity = 'critical'
+        elif conf >= 85:
+            severity = 'high'
+        elif conf >= 75:
+            severity = 'medium'
+        else:
+            severity = 'low'
+        recent.append({'label': a['label'],'time': datetime.fromisoformat(a['timestamp']).strftime('%H:%M:%S'),'confidence': conf,'port': a.get('dst_port', '—'),'packets': a['fwd_pkts'] + a['bwd_pkts'],'severity': severity})
+    return jsonify({'total_packets': total_packets,'attacks_detected': attacks,'attack_rate': rate,'threat_level': level,'traffic_labels': labels,'traffic_normal': normal_counts,'traffic_attacks': attack_counts,'ddos_count': ddos,'portscan_count': portscan,'bot_count': bot,'recent_alerts': recent})
+
+@app.route('/api/all_alerts')
+def api_all_alerts():
+    data = read_shared()
+    alerts = data.get("alerts", [])
+    result = []
+    for a in alerts:
+        conf = a['confidence']
+        if conf >= 95:
+            severity = 'CRITICAL'
+            color = 'danger'
+        elif conf >= 85:
+            severity = 'HIGH'
+            color = 'warning'
+        else:
+            severity = 'MEDIUM'
+            color = 'info'
+        result.append({'time': datetime.fromisoformat(a['timestamp']).strftime('%Y-%m-%d %H:%M:%S'),'label': a['label'],'confidence': a['confidence'],'severity': severity,'severity_color': color,'port': a.get('dst_port', '—'),'packets': a['fwd_pkts'] + a['bwd_pkts']})
+    return jsonify(result)
+
+@app.route('/api/export_alerts_csv')
+def api_export_csv():
+    data = read_shared()
+    alerts = data.get("alerts", [])
+    csv = "Timestamp,Attack Type,Confidence,Port,Packets\n"
+    for a in alerts:
+        csv += f"{a['timestamp']},{a['label']},{a['confidence']},{a.get('dst_port','')},{a['fwd_pkts']+a['bwd_pkts']}\n"
+    return Response(csv, mimetype='text/csv', headers={'Content-Disposition': 'attachment;filename=alerts.csv'})
+
+@app.route('/api/system_stats')
+def api_system_stats():
+    cpu = psutil.cpu_percent(interval=0.1)
+    mem = psutil.virtual_memory().percent
+    disk = psutil.disk_usage('/').percent
+    uptime_seconds = int(time.time() - START_TIME)
+    if uptime_seconds < 60:
+        uptime_str = f"{uptime_seconds}s"
+    elif uptime_seconds < 3600:
+        uptime_str = f"{uptime_seconds // 60}m"
+    else:
+        uptime_str = f"{uptime_seconds // 3600}h {(uptime_seconds % 3600) // 60}m"
+    return jsonify({'cpu': round(cpu, 1),'memory': round(mem, 1),'disk': round(disk, 1),'uptime': uptime_str})
 
 @app.route('/api/generate_report', methods=['POST'])
-def api_report():
-    fname = generate_pdf_report()
-    return jsonify({"filename": fname})
+def api_generate_report():
+    sys.path.insert(0, str(Path(__file__).parent))
+    from report_generator import IDSReportGenerator
+    data = read_shared()
+    alerts = data.get("alerts", [])
+    generator = IDSReportGenerator(alerts)
+    filename = generator.generate_report()
+    return jsonify({"filename": filename})
 
 @app.route('/reports/<path:filename>')
 def serve_report(filename):
@@ -657,7 +439,7 @@ def serve_report(filename):
 
 if __name__ == '__main__':
     print("\n" + "="*60)
-    print("  AI-IDS SIEM DASHBOARD")
-    print("  Open browser → http://127.0.0.1:5000")
+    print("  AI-IDS PROFESSIONAL DASHBOARD")
+    print("  http://127.0.0.1:5000")
     print("="*60 + "\n")
     app.run(host='0.0.0.0', port=5000, debug=False)
