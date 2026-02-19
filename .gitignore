@@ -13,3 +13,6 @@ docs/visualizations/*.png
 .idea/
 .vscode/
 *.swp
+config/
+*.pyc
+__pycache__/

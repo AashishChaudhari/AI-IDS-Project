@@ -3,7 +3,7 @@
 import json, os, time, psutil, sys
 from pathlib import Path
 from datetime import datetime, timedelta
-from flask import Flask, jsonify, send_from_directory, Response
+from flask import Flask, jsonify, send_from_directory, Response, request
 
 app = Flask(__name__)
 
@@ -443,3 +443,63 @@ if __name__ == '__main__':
     print("  http://127.0.0.1:5000")
     print("="*60 + "\n")
     app.run(host='0.0.0.0', port=5000, debug=False)
+
+@app.route('/api/email_history')
+def api_email_history():
+    try:
+        sys.path.insert(0, str(Path(__file__).parent.parent / 'alerts'))
+        from email_alerts import EmailAlerter
+        alerter = EmailAlerter()
+        return jsonify(alerter.get_history())
+    except:
+        return jsonify([])
+
+@app.route('/api/email_config', methods=['GET'])
+def api_get_email_config():
+    config_file = BASE_DIR / 'config' / 'email_config.json'
+    try:
+        with open(config_file) as f:
+            config = json.load(f)
+        config['sender_password'] = '••••••••'  # Mask password
+        return jsonify(config)
+    except:
+        return jsonify({})
+
+@app.route('/api/email_config', methods=['POST'])
+def api_save_email_config():
+    config_file = BASE_DIR / 'config' / 'email_config.json'
+    config_file.parent.mkdir(exist_ok=True)
+    data = request.get_json()
+    
+    # Keep existing password if masked
+    if data.get('sender_password') == '••••••••':
+        try:
+            with open(config_file) as f:
+                existing = json.load(f)
+            data['sender_password'] = existing['sender_password']
+        except:
+            pass
+    
+    with open(config_file, 'w') as f:
+        json.dump(data, f, indent=2)
+    return jsonify({'success': True})
+
+@app.route('/api/test_email', methods=['POST'])
+def api_test_email():
+    try:
+        sys.path.insert(0, str(Path(__file__).parent.parent / 'alerts'))
+        from email_alerts import EmailAlerter
+        alerter = EmailAlerter()
+        test_attack = {
+            'timestamp': datetime.now().isoformat(),
+            'label': 'DDoS',
+            'confidence': 99.0,
+            'dst_port': 80,
+            'fwd_pkts': 500,
+            'bwd_pkts': 0
+        }
+        alerter.last_alert_time = {}  # Clear cooldown for test
+        result = alerter.send_alert(test_attack, [test_attack])
+        return jsonify({'success': result})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
