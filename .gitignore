@@ -16,3 +16,27 @@ docs/visualizations/*.png
 config/
 *.pyc
 __pycache__/
+# Sensitive configurations
+config/email_config.json
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Virtual environment
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+
+# Reports and temporary files
+reports/*.pdf
+reports/temp/
+
+# Data files
+data/live_results.json

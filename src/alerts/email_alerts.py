@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """
-AI-IDS Email Alert System
-Triggers on every attack - includes attack type, confidence, timestamp, port, threat level
+AI-IDS Email Alert System - Enhanced for All Attack Types
 """
 import smtplib
 import json
@@ -53,9 +52,51 @@ def get_mitigation(label):
             "Isolate potentially compromised hosts",
             "Run malware scan on internal systems",
             "Review outbound connections for C&C traffic"
+        ],
+        "SSH-Brute-Force": [
+            "Block source IP immediately",
+            "Change SSH port from default (22)",
+            "Enable fail2ban or similar protection",
+            "Require SSH key authentication only"
+        ],
+        "SQL-Injection": [
+            "Block attacking IP address",
+            "Review and patch vulnerable application code",
+            "Enable Web Application Firewall (WAF)",
+            "Use parameterized queries in applications"
+        ],
+        "XSS-Attack": [
+            "Block attacking IP address",
+            "Sanitize all user inputs in web application",
+            "Enable Content Security Policy (CSP) headers",
+            "Review and update web application security"
+        ],
+        "Command-Injection": [
+            "URGENT: Block source IP immediately",
+            "Review application for command execution vulnerabilities",
+            "Disable shell access from web applications",
+            "Audit system for potential backdoors"
+        ],
+        "Web-Attack": [
+            "Block attacking IP address",
+            "Enable Web Application Firewall",
+            "Review web server logs for additional attacks",
+            "Update and patch web application"
+        ],
+        "Slowloris-DoS": [
+            "Block attacking IP addresses",
+            "Reduce HTTP keep-alive timeout",
+            "Limit connections per IP address",
+            "Enable anti-DDoS protection"
+        ],
+        "Unknown-Traffic": [
+            "Investigate source and destination of traffic",
+            "Monitor for patterns indicating new attack type",
+            "Consider blocking if traffic continues",
+            "Review IDS logs for additional context"
         ]
     }
-    return tips.get(label, ["Review dashboard for more details"])
+    return tips.get(label, ["Review dashboard for more details", "Contact security team if suspicious"])
 
 
 def build_email_html(attack):
@@ -71,7 +112,14 @@ def build_email_html(attack):
     type_colors = {
         'DDoS': '#ef4444',
         'PortScan': '#f59e0b',
-        'Bot': '#a855f7'
+        'Bot': '#a855f7',
+        'SSH-Brute-Force': '#ec4899',
+        'SQL-Injection': '#dc2626',
+        'XSS-Attack': '#f97316',
+        'Command-Injection': '#b91c1c',
+        'Web-Attack': '#ea580c',
+        'Slowloris-DoS': '#e11d48',
+        'Unknown-Traffic': '#64748b'
     }
     type_color = type_colors.get(label, '#64748b')
 
@@ -91,7 +139,7 @@ def build_email_html(attack):
 <!-- Severity Banner -->
 <div style="background:{sev_color};padding:14px 32px;text-align:center;">
   <h2 style="color:white;margin:0;font-size:18px;letter-spacing:1px;">
-    ⚠️ {threat_level} THREAT — {label} ATTACK DETECTED
+    ⚠️ {threat_level} THREAT — {label} DETECTED
   </h2>
 </div>
 

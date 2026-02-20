@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""AI-IDS Professional SIEM Dashboard"""
+"""AI-IDS Professional SIEM Dashboard - Enhanced with New Attack Types"""
 import json, os, time, psutil, sys
 from pathlib import Path
 from datetime import datetime, timedelta
@@ -34,6 +34,20 @@ def get_threat_level():
     elif len(recent) > 5:
         return "MEDIUM", "#f59e0b"
     return "LOW", "#22c55e"
+
+# Enhanced attack type colors
+ATTACK_COLORS = {
+    'DDoS': '#ef4444',
+    'PortScan': '#f59e0b',
+    'Bot': '#a855f7',
+    'SSH-Brute-Force': '#ec4899',
+    'SQL-Injection': '#dc2626',
+    'XSS-Attack': '#f97316',
+    'Command-Injection': '#b91c1c',
+    'Web-Attack': '#ea580c',
+    'Slowloris-DoS': '#e11d48',
+    'Unknown-Traffic': '#64748b'
+}
 
 # HTML Templates
 OVERVIEW_HTML = '''<!DOCTYPE html>
@@ -80,6 +94,13 @@ body{background:var(--bg-primary);color:var(--text-primary);font-family:'Inter',
 .badge-ddos{background:rgba(239,68,68,.2);color:#ef4444}
 .badge-portscan{background:rgba(245,158,11,.2);color:#f59e0b}
 .badge-bot{background:rgba(168,85,247,.2);color:#a855f7}
+.badge-ssh-brute-force{background:rgba(236,72,153,.2);color:#ec4899}
+.badge-sql-injection{background:rgba(220,38,38,.2);color:#dc2626}
+.badge-xss-attack{background:rgba(249,115,22,.2);color:#f97316}
+.badge-command-injection{background:rgba(185,28,28,.2);color:#b91c1c}
+.badge-web-attack{background:rgba(234,88,12,.2);color:#ea580c}
+.badge-slowloris-dos{background:rgba(225,29,72,.2);color:#e11d48}
+.badge-unknown-traffic{background:rgba(100,116,139,.2);color:#64748b}
 .btn-pdf{background:#dc2626;color:white;border:none;padding:.625rem 1.25rem;border-radius:.5rem;font-weight:600;transition:all .2s;cursor:pointer}
 .btn-pdf:hover{background:#b91c1c;transform:translateY(-2px);box-shadow:0 4px 12px rgba(220,38,38,.4)}
 .btn-pdf:disabled{opacity:.5;cursor:not-allowed}
@@ -124,8 +145,8 @@ setInterval(updateTimestamp,1000);updateTimestamp();
 const trafficCtx=document.getElementById('trafficChart').getContext('2d');
 const distCtx=document.getElementById('distributionChart').getContext('2d');
 const trafficChart=new Chart(trafficCtx,{type:'line',data:{labels:[],datasets:[{label:'Normal',data:[],borderColor:'#22c55e',backgroundColor:'rgba(34,197,94,0.1)',tension:0.4,fill:true},{label:'Attacks',data:[],borderColor:'#ef4444',backgroundColor:'rgba(239,68,68,0.1)',tension:0.4,fill:true}]},options:{responsive:true,maintainAspectRatio:true,plugins:{legend:{display:true,labels:{color:'#94a3b8'}}},scales:{y:{ticks:{color:'#64748b'},grid:{color:'#1e293b'}},x:{ticks:{color:'#64748b'},grid:{color:'#1e293b'}}}}});
-const distChart=new Chart(distCtx,{type:'doughnut',data:{labels:['DDoS','PortScan','Bot'],datasets:[{data:[0,0,0],backgroundColor:['#ef4444','#f59e0b','#a855f7']}]},options:{responsive:true,maintainAspectRatio:true,plugins:{legend:{position:'bottom',labels:{color:'#cbd5e1',padding:15}}}}});
-async function updateDashboard(){try{const res=await fetch('/api/dashboard');const data=await res.json();document.getElementById('totalPackets').textContent=data.total_packets.toLocaleString();document.getElementById('attacksDetected').textContent=data.attacks_detected;document.getElementById('attackRate').textContent=data.attack_rate+'/min avg';document.getElementById('threatLevel').textContent=data.threat_level;const tlCard=document.querySelector('.kpi-card.yellow');tlCard.className='kpi-card';if(data.threat_level==='CRITICAL'||data.threat_level==='HIGH')tlCard.classList.add('red');else if(data.threat_level==='MEDIUM')tlCard.classList.add('yellow');else tlCard.classList.add('green');trafficChart.data.labels=data.traffic_labels;trafficChart.data.datasets[0].data=data.traffic_normal;trafficChart.data.datasets[1].data=data.traffic_attacks;trafficChart.update();distChart.data.datasets[0].data=[data.ddos_count,data.portscan_count,data.bot_count];distChart.update();const alertsDiv=document.getElementById('recentAlerts');if(data.recent_alerts.length===0){alertsDiv.innerHTML='<p class="text-center text-secondary py-4">No attacks detected</p>'}else{alertsDiv.innerHTML=data.recent_alerts.slice(0,5).map(a=>`<div class="alert-item ${a.severity}"><div class="d-flex justify-content-between align-items-start"><div><span class="badge-attack badge-${a.label.toLowerCase()}">${a.label}</span><span class="ms-2 text-secondary">${a.time}</span></div><span class="badge bg-secondary">${a.confidence}%</span></div><div class="mt-2 text-secondary small"><i class="fas fa-bullseye"></i> Port ${a.port} | <i class="fas fa-cube"></i> ${a.packets} pkts</div></div>`).join('')}}catch(e){console.error(e)}}
+const distChart=new Chart(distCtx,{type:'doughnut',data:{labels:[],datasets:[{data:[],backgroundColor:[]}]},options:{responsive:true,maintainAspectRatio:true,plugins:{legend:{position:'bottom',labels:{color:'#cbd5e1',padding:10,font:{size:10}}}}}});
+async function updateDashboard(){try{const res=await fetch('/api/dashboard');const data=await res.json();document.getElementById('totalPackets').textContent=data.total_packets.toLocaleString();document.getElementById('attacksDetected').textContent=data.attacks_detected;document.getElementById('attackRate').textContent=data.attack_rate+'/min avg';document.getElementById('threatLevel').textContent=data.threat_level;const tlCard=document.querySelector('.kpi-card.yellow');tlCard.className='kpi-card';if(data.threat_level==='CRITICAL'||data.threat_level==='HIGH')tlCard.classList.add('red');else if(data.threat_level==='MEDIUM')tlCard.classList.add('yellow');else tlCard.classList.add('green');trafficChart.data.labels=data.traffic_labels;trafficChart.data.datasets[0].data=data.traffic_normal;trafficChart.data.datasets[1].data=data.traffic_attacks;trafficChart.update();distChart.data.labels=data.attack_types;distChart.data.datasets[0].data=data.attack_counts;distChart.data.datasets[0].backgroundColor=data.attack_colors;distChart.update();const alertsDiv=document.getElementById('recentAlerts');if(data.recent_alerts.length===0){alertsDiv.innerHTML='<p class="text-center text-secondary py-4">No attacks detected</p>'}else{alertsDiv.innerHTML=data.recent_alerts.slice(0,5).map(a=>`<div class="alert-item ${a.severity}"><div class="d-flex justify-content-between align-items-start"><div><span class="badge-attack badge-${a.label.toLowerCase().replace(/\s/g,'-')}">${a.label}</span><span class="ms-2 text-secondary">${a.time}</span></div><span class="badge bg-secondary">${a.confidence}%</span></div><div class="mt-2 text-secondary small"><i class="fas fa-bullseye"></i> Port ${a.port} | <i class="fas fa-cube"></i> ${a.packets} pkts</div></div>`).join('')}}catch(e){console.error(e)}}
 async function generateReport(){const btn=document.getElementById('pdfBtn');btn.disabled=true;btn.innerHTML='<i class="fas fa-spinner fa-spin"></i> Generating...';try{const res=await fetch('/api/generate_report',{method:'POST'});const data=await res.json();if(data.filename){const a=document.createElement('a');a.href='/reports/'+data.filename;a.download=data.filename;a.click();btn.innerHTML='<i class="fas fa-check"></i> Downloaded!';setTimeout(()=>{btn.innerHTML='<i class="fas fa-file-pdf"></i> Export PDF Report';btn.disabled=false},3000)}}catch(e){console.error(e);btn.innerHTML='<i class="fas fa-times"></i> Error';setTimeout(()=>{btn.innerHTML='<i class="fas fa-file-pdf"></i> Export PDF Report';btn.disabled=false},3000)}}
 setInterval(updateDashboard,3000);updateDashboard();
 </script>
@@ -151,9 +172,7 @@ body{background:var(--bg-primary);color:var(--text-primary);font-family:'Inter',
 .card-header-custom{display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;padding-bottom:1rem;border-bottom:1px solid var(--border-color)}
 .table-dark{--bs-table-bg:var(--bg-card);--bs-table-border-color:var(--border-color)}
 .btn-export{background:var(--accent-blue);color:white;border:none;padding:.625rem 1.25rem;border-radius:.5rem;font-weight:600}
-.badge-ddos{background:rgba(239,68,68,.2);color:#ef4444;padding:.375rem .75rem;border-radius:.375rem;font-size:.75rem;font-weight:600}
-.badge-portscan{background:rgba(245,158,11,.2);color:#f59e0b;padding:.375rem .75rem;border-radius:.375rem;font-size:.75rem;font-weight:600}
-.badge-bot{background:rgba(168,85,247,.2);color:#a855f7;padding:.375rem .75rem;border-radius:.375rem;font-size:.75rem;font-weight:600}
+.badge-attack{padding:.375rem .75rem;border-radius:.375rem;font-size:.75rem;font-weight:600}
 </style>
 </head>
 <body>
@@ -184,7 +203,7 @@ body{background:var(--bg-primary);color:var(--text-primary);font-family:'Inter',
 <script src="https://cdn.datatables.net/1.13.7/js/dataTables.bootstrap5.min.js"></script>
 <script>
 let tbl;
-async function load(){const r=await fetch('/api/all_alerts');const a=await r.json();if(tbl)tbl.destroy();document.querySelector('#alertsTable tbody').innerHTML=a.map(x=>`<tr><td>${x.time}</td><td>192.168.68.145</td><td><span class="badge-${x.label.toLowerCase()}">${x.label}</span></td><td>${x.confidence}%</td><td><span class="badge bg-${x.severity_color}">${x.severity}</span></td><td>${x.port}</td><td>${x.packets}</td></tr>`).join('');tbl=$('#alertsTable').DataTable({order:[[0,'desc']],pageLength:25})}
+async function load(){const r=await fetch('/api/all_alerts');const a=await r.json();if(tbl)tbl.destroy();document.querySelector('#alertsTable tbody').innerHTML=a.map(x=>`<tr><td>${x.time}</td><td>192.168.68.145</td><td><span class="badge-attack" style="background:${x.color}20;color:${x.color}">${x.label}</span></td><td>${x.confidence}%</td><td><span class="badge bg-${x.severity_color}">${x.severity}</span></td><td>${x.port}</td><td>${x.packets}</td></tr>`).join('');tbl=$('#alertsTable').DataTable({order:[[0,'desc']],pageLength:25})}
 function exportCSV(){fetch('/api/export_alerts_csv').then(r=>r.blob()).then(b=>{const a=document.createElement('a');a.href=URL.createObjectURL(b);a.download='alerts.csv';a.click()})}
 load();setInterval(load,10000);
 </script>
@@ -234,27 +253,38 @@ body{background:var(--bg-primary);color:var(--text-primary);font-family:'Inter',
 </div>
 </nav>
 <div class="container-fluid p-4">
-<div class="row mb-4"><div class="col-12"><h2><i class="fas fa-chart-line"></i> Model Analytics</h2><p class="text-secondary">Performance metrics and visualization</p></div></div>
+<div class="row mb-4"><div class="col-12"><h2><i class="fas fa-chart-line"></i> Model Analytics</h2><p class="text-secondary">Performance metrics and live attack statistics</p></div></div>
 <div class="row g-4 mb-4">
 <div class="col-md-3"><div class="kpi-card green"><div class="kpi-label">Overall Accuracy</div><div class="kpi-value">99.81%</div><div class="kpi-change">94,110 test samples</div></div></div>
-<div class="col-md-3"><div class="kpi-card blue"><div class="kpi-label">Precision</div><div class="kpi-value">99.82%</div><div class="kpi-change">Weighted average</div></div></div>
-<div class="col-md-3"><div class="kpi-card blue"><div class="kpi-label">Recall</div><div class="kpi-value">99.81%</div><div class="kpi-change">Weighted average</div></div></div>
+<div class="col-md-3"><div class="kpi-card blue"><div class="kpi-label">Detection Types</div><div class="kpi-value" id="detectionTypes">8</div><div class="kpi-change">Hybrid + ML detection</div></div></div>
+<div class="col-md-3"><div class="kpi-card blue"><div class="kpi-label">Recall</div><div class="kpi-value">99.81%</div><div class="kpi-change">True positive rate</div></div></div>
 <div class="col-md-3"><div class="kpi-card yellow"><div class="kpi-label">False Positive Rate</div><div class="kpi-value">0.19%</div><div class="kpi-change">179 / 94,110</div></div></div>
 </div>
 <div class="row g-4">
-<div class="col-lg-6"><div class="chart-card"><h5 class="mb-3">Confusion Matrix</h5><canvas id="confusionMatrix" height="300"></canvas></div></div>
-<div class="col-lg-6"><div class="chart-card"><h5 class="mb-3">Per-Class Performance</h5>
-<table class="table table-dark"><thead><tr><th>Class</th><th>Precision</th><th>Recall</th><th>F1-Score</th></tr></thead>
-<tbody><tr><td>BENIGN</td><td>1.00</td><td>1.00</td><td>1.00</td></tr><tr><td>DDoS</td><td>1.00</td><td>1.00</td><td>1.00</td></tr>
-<tr><td>PortScan</td><td>1.00</td><td>1.00</td><td>1.00</td></tr><tr><td>Bot</td><td>0.49</td><td>0.96</td><td>0.65</td></tr></tbody></table>
-<p class="small text-secondary mt-3"><i class="fas fa-info-circle"></i> Bot class shows lower precision due to extreme imbalance (0.2% of dataset). High recall ensures most bot activity is detected.</p>
+<div class="col-lg-6"><div class="chart-card"><h5 class="mb-3">Live Attack Distribution</h5><canvas id="liveAttacks" height="300"></canvas></div></div>
+<div class="col-lg-6"><div class="chart-card"><h5 class="mb-3">Detection Methods</h5>
+<table class="table table-dark table-sm">
+<thead><tr><th>Attack Type</th><th>Detection Method</th><th>Threshold</th></tr></thead>
+<tbody>
+<tr><td>DDoS</td><td>Rate-based</td><td>&gt;100 pkt/s</td></tr>
+<tr><td>PortScan</td><td>Port counting</td><td>10+ ports</td></tr>
+<tr><td>SSH Brute Force</td><td>Attempt tracking</td><td>10+ attempts/10s</td></tr>
+<tr><td>SQL Injection</td><td>Pattern matching</td><td>SQL keywords</td></tr>
+<tr><td>XSS</td><td>Pattern matching</td><td>Script tags</td></tr>
+<tr><td>Cmd Injection</td><td>Pattern matching</td><td>Shell commands</td></tr>
+<tr><td>Slowloris</td><td>Connection tracking</td><td>20+ slow conn</td></tr>
+<tr><td>Unknown</td><td>ML confidence</td><td>&lt;60%</td></tr>
+</tbody>
+</table>
 </div></div>
 </div>
 </div>
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
 <script>
-const cmCtx=document.getElementById('confusionMatrix').getContext('2d');
-new Chart(cmCtx,{type:'bar',data:{labels:['BENIGN','DDoS','PortScan','Bot'],datasets:[{label:'True Positives',data:[73832,10315,9584,364],backgroundColor:'#22c55e'},{label:'False Positives',data:[0,0,0,379],backgroundColor:'#ef4444'}]},options:{responsive:true,scales:{y:{ticks:{color:'#64748b'},grid:{color:'#1e293b'}},x:{ticks:{color:'#64748b'},grid:{color:'#1e293b'}}},plugins:{legend:{labels:{color:'#94a3b8'}}}}});
+const liveCtx=document.getElementById('liveAttacks').getContext('2d');
+const liveChart=new Chart(liveCtx,{type:'bar',data:{labels:[],datasets:[{label:'Attacks Detected',data:[],backgroundColor:[]}]},options:{responsive:true,indexAxis:'y',scales:{y:{ticks:{color:'#64748b'},grid:{color:'#1e293b'}},x:{ticks:{color:'#64748b'},grid:{color:'#1e293b'}}},plugins:{legend:{display:false}}}});
+async function updateLive(){try{const r=await fetch('/api/dashboard');const d=await r.json();liveChart.data.labels=d.attack_types;liveChart.data.datasets[0].data=d.attack_counts;liveChart.data.datasets[0].backgroundColor=d.attack_colors;liveChart.update();document.getElementById('detectionTypes').textContent=d.attack_types.length}catch(e){}}
+setInterval(updateLive,5000);updateLive();
 </script>
 </body>
 </html>'''
@@ -301,13 +331,13 @@ body{background:var(--bg-primary);color:var(--text-primary);font-family:'Inter',
 <div class="col-lg-6"><div class="chart-card"><h5 class="mb-3"><i class="fas fa-info-circle"></i> Configuration</h5>
 <table class="table table-dark table-sm">
 <tr><td><strong>Model Type</strong></td><td class="text-end">Random Forest</td></tr>
-<tr><td><strong>Model Version</strong></td><td class="text-end">1.0</td></tr>
+<tr><td><strong>Detection Mode</strong></td><td class="text-end">Hybrid (ML + Signature)</td></tr>
+<tr><td><strong>Attack Types</strong></td><td class="text-end">8 types</td></tr>
 <tr><td><strong>Dataset</strong></td><td class="text-end">CIC-IDS2017</td></tr>
-<tr><td><strong>Training Samples</strong></td><td class="text-end">376,437</td></tr>
 <tr><td><strong>Test Accuracy</strong></td><td class="text-end">99.81%</td></tr>
-<tr><td><strong>Detection Mode</strong></td><td class="text-end">Hybrid (ML + Rate)</td></tr>
-<tr><td><strong>Network Interface</strong></td><td class="text-end">eth0</td></tr>
-<tr><td><strong>System Uptime</strong></td><td class="text-end" id="uptime">0m</td></tr>
+<tr><td><strong>Interface</strong></td><td class="text-end">eth0</td></tr>
+<tr><td><strong>Email Alerts</strong></td><td class="text-end">Configured</td></tr>
+<tr><td><strong>Uptime</strong></td><td class="text-end" id="uptime">0m</td></tr>
 </table>
 </div></div>
 </div>
@@ -339,11 +369,14 @@ def settings_page():
 
 @app.route('/api/dashboard')
 def api_dashboard():
+    from collections import Counter
     data = read_shared()
     alerts = data.get("alerts", [])
     traffic = data.get("traffic", [])
+    
     total_packets = sum(t['fwd_pkts'] + t['bwd_pkts'] for t in traffic)
     attacks = len(alerts)
+    
     if alerts:
         first = datetime.fromisoformat(alerts[0]['timestamp'])
         last = datetime.fromisoformat(alerts[-1]['timestamp'])
@@ -351,22 +384,33 @@ def api_dashboard():
         rate = round(attacks / minutes, 1)
     else:
         rate = 0
+    
     level, color = get_threat_level()
+    
     now = datetime.now()
     labels = [(now - timedelta(minutes=i)).strftime('%H:%M') for i in range(59, -1, -1)]
-    attack_counts = [0] * 60
+    
+    attack_counts_timeline = [0] * 60
     normal_counts = [0] * 60
+    
     for t in traffic[-200:]:
         ts = datetime.fromisoformat(t['timestamp'])
         mins_ago = int((now - ts).seconds / 60)
         if mins_ago < 60:
             if t['is_attack']:
-                attack_counts[59 - mins_ago] += 1
+                attack_counts_timeline[59 - mins_ago] += 1
             else:
                 normal_counts[59 - mins_ago] += 1
-    ddos = sum(1 for a in alerts if a['label'] == 'DDoS')
-    portscan = sum(1 for a in alerts if a['label'] == 'PortScan')
-    bot = sum(1 for a in alerts if a['label'] == 'Bot')
+    
+    # Count each attack type
+    attack_type_counter = Counter(a['label'] for a in alerts)
+    
+    # Build distribution data
+    attack_types = list(attack_type_counter.keys())
+    attack_counts = list(attack_type_counter.values())
+    attack_colors = [ATTACK_COLORS.get(t, '#64748b') for t in attack_types]
+    
+    # Recent alerts with severity
     recent = []
     for a in alerts[-10:]:
         conf = a['confidence']
@@ -378,8 +422,29 @@ def api_dashboard():
             severity = 'medium'
         else:
             severity = 'low'
-        recent.append({'label': a['label'],'time': datetime.fromisoformat(a['timestamp']).strftime('%H:%M:%S'),'confidence': conf,'port': a.get('dst_port', '—'),'packets': a['fwd_pkts'] + a['bwd_pkts'],'severity': severity})
-    return jsonify({'total_packets': total_packets,'attacks_detected': attacks,'attack_rate': rate,'threat_level': level,'traffic_labels': labels,'traffic_normal': normal_counts,'traffic_attacks': attack_counts,'ddos_count': ddos,'portscan_count': portscan,'bot_count': bot,'recent_alerts': recent})
+        
+        recent.append({
+            'label': a['label'],
+            'time': datetime.fromisoformat(a['timestamp']).strftime('%H:%M:%S'),
+            'confidence': conf,
+            'port': a.get('dst_port', '—'),
+            'packets': a['fwd_pkts'] + a['bwd_pkts'],
+            'severity': severity
+        })
+    
+    return jsonify({
+        'total_packets': total_packets,
+        'attacks_detected': attacks,
+        'attack_rate': rate,
+        'threat_level': level,
+        'traffic_labels': labels,
+        'traffic_normal': normal_counts,
+        'traffic_attacks': attack_counts_timeline,
+        'attack_types': attack_types,
+        'attack_counts': attack_counts,
+        'attack_colors': attack_colors,
+        'recent_alerts': recent
+    })
 
 @app.route('/api/all_alerts')
 def api_all_alerts():
@@ -397,7 +462,17 @@ def api_all_alerts():
         else:
             severity = 'MEDIUM'
             color = 'info'
-        result.append({'time': datetime.fromisoformat(a['timestamp']).strftime('%Y-%m-%d %H:%M:%S'),'label': a['label'],'confidence': a['confidence'],'severity': severity,'severity_color': color,'port': a.get('dst_port', '—'),'packets': a['fwd_pkts'] + a['bwd_pkts']})
+        
+        result.append({
+            'time': datetime.fromisoformat(a['timestamp']).strftime('%Y-%m-%d %H:%M:%S'),
+            'label': a['label'],
+            'confidence': a['confidence'],
+            'severity': severity,
+            'severity_color': color,
+            'port': a.get('dst_port', '—'),
+            'packets': a['fwd_pkts'] + a['bwd_pkts'],
+            'color': ATTACK_COLORS.get(a['label'], '#64748b')
+        })
     return jsonify(result)
 
 @app.route('/api/export_alerts_csv')
@@ -443,63 +518,3 @@ if __name__ == '__main__':
     print("  http://127.0.0.1:5000")
     print("="*60 + "\n")
     app.run(host='0.0.0.0', port=5000, debug=False)
-
-@app.route('/api/email_history')
-def api_email_history():
-    try:
-        sys.path.insert(0, str(Path(__file__).parent.parent / 'alerts'))
-        from email_alerts import EmailAlerter
-        alerter = EmailAlerter()
-        return jsonify(alerter.get_history())
-    except:
-        return jsonify([])
-
-@app.route('/api/email_config', methods=['GET'])
-def api_get_email_config():
-    config_file = BASE_DIR / 'config' / 'email_config.json'
-    try:
-        with open(config_file) as f:
-            config = json.load(f)
-        config['sender_password'] = '••••••••'  # Mask password
-        return jsonify(config)
-    except:
-        return jsonify({})
-
-@app.route('/api/email_config', methods=['POST'])
-def api_save_email_config():
-    config_file = BASE_DIR / 'config' / 'email_config.json'
-    config_file.parent.mkdir(exist_ok=True)
-    data = request.get_json()
-    
-    # Keep existing password if masked
-    if data.get('sender_password') == '••••••••':
-        try:
-            with open(config_file) as f:
-                existing = json.load(f)
-            data['sender_password'] = existing['sender_password']
-        except:
-            pass
-    
-    with open(config_file, 'w') as f:
-        json.dump(data, f, indent=2)
-    return jsonify({'success': True})
-
-@app.route('/api/test_email', methods=['POST'])
-def api_test_email():
-    try:
-        sys.path.insert(0, str(Path(__file__).parent.parent / 'alerts'))
-        from email_alerts import EmailAlerter
-        alerter = EmailAlerter()
-        test_attack = {
-            'timestamp': datetime.now().isoformat(),
-            'label': 'DDoS',
-            'confidence': 99.0,
-            'dst_port': 80,
-            'fwd_pkts': 500,
-            'bwd_pkts': 0
-        }
-        alerter.last_alert_time = {}  # Clear cooldown for test
-        result = alerter.send_alert(test_attack, [test_attack])
-        return jsonify({'success': result})
-    except Exception as e:
-        return jsonify({'success': False, 'error': str(e)})
