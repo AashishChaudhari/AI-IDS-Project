@@ -39,3 +39,10 @@ Thumbs.db
 # Temporary files
 *.tmp
 .cache/
+
+# Large training data files
+data/processed/*.npy
+models/final_model.pkl
+*.pkl
+data/live_results.json
+create_presentation.js
