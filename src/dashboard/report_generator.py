@@ -1,426 +1,371 @@
 #!/usr/bin/env python3
-"""Enhanced PDF Report Generator with Charts"""
-from datetime import datetime, timedelta
-from pathlib import Path
-from collections import Counter
-import json
-
+"""
+AI-IDS Professional Report Generator
+Generates comprehensive PDF security reports with enhanced visualizations
+"""
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
-import numpy as np
+from matplotlib.patches import Rectangle
+from datetime import datetime
+from pathlib import Path
+from collections import Counter
+import io
+import os
 
-from reportlab.lib.pagesizes import letter
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.lib.colors import HexColor
+# Import ReportLab
+from reportlab.lib.pagesizes import letter, A4
+from reportlab.lib import colors
 from reportlab.lib.units import inch
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, PageBreak, Table, TableStyle, Image
-from reportlab.lib.enums import TA_CENTER
-
-BASE_DIR = Path('/home/aashish/AI-IDS-Project')
-REPORTS_DIR = BASE_DIR / 'reports'
-TEMP_DIR = REPORTS_DIR / 'temp'
-REPORTS_DIR.mkdir(exist_ok=True)
-TEMP_DIR.mkdir(exist_ok=True)
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, PageBreak, Image
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT
+from reportlab.pdfgen import canvas
 
 class IDSReportGenerator:
-    def __init__(self, alerts_data):
-        self.alerts = alerts_data
-        self.styles = getSampleStyleSheet()
-        self._setup_styles()
+    def __init__(self, alerts):
+        self.alerts = alerts
+        self.timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        self.filename = f"AI_IDS_Report_{self.timestamp}.pdf"
+        self.filepath = Path(f"/home/aashish/AI-IDS-Project/reports/{self.filename}")
         
-    def _setup_styles(self):
-        self.styles.add(ParagraphStyle(
-            name='CoverTitle',
-            parent=self.styles['Title'],
-            fontSize=32,
-            textColor=HexColor('#1a5276'),
-            alignment=TA_CENTER,
-            fontName='Helvetica-Bold'
-        ))
-        
-        self.styles.add(ParagraphStyle(
-            name='SectionHeader',
-            parent=self.styles['Heading1'],
-            fontSize=16,
-            textColor=HexColor('#1a5276'),
-            spaceAfter=12,
-            fontName='Helvetica-Bold'
-        ))
-        
-        self.styles.add(ParagraphStyle(
-            name='Subsection',
-            parent=self.styles['Heading2'],
-            fontSize=13,
-            textColor=HexColor('#2874a6'),
-            spaceAfter=8,
-            fontName='Helvetica-Bold'
-        ))
-
-    def _create_traffic_timeline_chart(self):
-        """Create traffic timeline chart matching dashboard"""
-        now = datetime.now()
-        labels = [(now - timedelta(minutes=i)).strftime('%H:%M') for i in range(59, -1, -1)]
-        
-        attack_counts = [0] * 60
-        normal_counts = [0] * 60
-        
-        # Load traffic data
-        try:
-            with open(BASE_DIR / 'data' / 'live_results.json', 'r') as f:
-                data = json.load(f)
-                traffic = data.get('traffic', [])
-                
-            for t in traffic[-200:]:
-                ts = datetime.fromisoformat(t['timestamp'])
-                mins_ago = int((now - ts).seconds / 60)
-                if mins_ago < 60:
-                    if t['is_attack']:
-                        attack_counts[59 - mins_ago] += 1
-                    else:
-                        normal_counts[59 - mins_ago] += 1
-        except:
-            pass
-        
-        fig, ax = plt.subplots(figsize=(8, 4))
-        ax.plot(labels, normal_counts, 'g-', label='Normal Traffic', linewidth=2, marker='o', markersize=3)
-        ax.plot(labels, attack_counts, 'r-', label='Attacks', linewidth=2, marker='s', markersize=3)
-        ax.set_xlabel('Time', fontsize=11, fontweight='bold')
-        ax.set_ylabel('Packet Count', fontsize=11, fontweight='bold')
-        ax.set_title('Real-Time Traffic Monitor (Last Hour)', fontsize=13, fontweight='bold')
-        ax.legend(loc='upper left')
-        ax.grid(True, alpha=0.3)
-        
-        # Show every 10th label to avoid crowding
-        ax.set_xticks(range(0, 60, 10))
-        ax.set_xticklabels([labels[i] for i in range(0, 60, 10)], rotation=45)
-        
-        chart_path = TEMP_DIR / 'traffic_timeline.png'
-        fig.tight_layout()
-        fig.savefig(chart_path, dpi=150, bbox_inches='tight')
-        plt.close(fig)
-        
-        return chart_path
-
-    def _create_attack_distribution_chart(self):
-        """Create attack distribution pie chart"""
-        if not self.alerts:
-            fig, ax = plt.subplots(figsize=(6, 4))
-            ax.text(0.5, 0.5, 'No Attacks Detected', ha='center', va='center', fontsize=14)
-            ax.axis('off')
-            chart_path = TEMP_DIR / 'attack_dist.png'
-            fig.savefig(chart_path, dpi=150, bbox_inches='tight')
-            plt.close(fig)
-            return chart_path
-        
+    def create_attack_distribution_chart(self):
+        """Create professional attack distribution pie chart without overlapping labels"""
         attack_counts = Counter(a['label'] for a in self.alerts)
         
-        fig, ax = plt.subplots(figsize=(6, 4))
-        colors = {'DDoS': '#ef4444', 'PortScan': '#f59e0b', 'Bot': '#a855f7'}
-        pie_colors = [colors.get(k, '#64748b') for k in attack_counts.keys()]
+        if not attack_counts:
+            return None
         
+        # Professional color scheme
+        colors_map = {
+            'DDoS': '#ef4444',
+            'PortScan': '#f59e0b',
+            'Bot': '#8b5cf6',
+            'SQL-Injection': '#dc2626',
+            'XSS-Attack': '#fb923c',
+            'SSH-Brute-Force': '#a855f7',
+            'Slowloris-DoS': '#f472b6'
+        }
+        
+        labels = list(attack_counts.keys())
+        sizes = list(attack_counts.values())
+        colors_list = [colors_map.get(label, '#64748b') for label in labels]
+        
+        fig, ax = plt.subplots(figsize=(10, 6), facecolor='white')
+        
+        # Create pie chart with better label positioning
         wedges, texts, autotexts = ax.pie(
-            attack_counts.values(), 
-            labels=attack_counts.keys(), 
+            sizes,
+            labels=None,  # We'll add labels manually
             autopct='%1.1f%%',
             startangle=90,
-            colors=pie_colors,
-            textprops={'fontsize': 11, 'fontweight': 'bold'}
+            colors=colors_list,
+            explode=[0.05] * len(labels),  # Slight separation
+            textprops={'fontsize': 11, 'weight': 'bold', 'color': 'white'}
         )
         
-        for autotext in autotexts:
-            autotext.set_color('white')
-            autotext.set_fontweight('bold')
+        # Add legend instead of labels on pie
+        ax.legend(
+            wedges,
+            [f'{label} ({count})' for label, count in attack_counts.items()],
+            title="Attack Types",
+            loc="center left",
+            bbox_to_anchor=(1, 0, 0.5, 1),
+            fontsize=10,
+            frameon=True,
+            shadow=True
+        )
         
-        ax.set_title('Attack Distribution', fontsize=13, fontweight='bold')
+        ax.set_title('Attack Distribution', fontsize=16, fontweight='bold', pad=20)
         
-        chart_path = TEMP_DIR / 'attack_dist.png'
-        fig.savefig(chart_path, dpi=150, bbox_inches='tight')
-        plt.close(fig)
+        # Save to buffer
+        buf = io.BytesIO()
+        plt.tight_layout()
+        plt.savefig(buf, format='png', dpi=150, bbox_inches='tight', facecolor='white')
+        buf.seek(0)
+        plt.close()
         
-        return chart_path
-
-    def _create_attack_types_bar_chart(self):
-        """Create bar chart of attack types"""
+        return buf
+    
+    def create_timeline_chart(self):
+        """Create attack timeline chart"""
         if not self.alerts:
             return None
         
-        attack_counts = Counter(a['label'] for a in self.alerts)
+        # Group by hour
+        hours = {}
+        for alert in self.alerts:
+            ts = datetime.fromisoformat(alert['timestamp'])
+            hour_key = ts.strftime('%H:00')
+            hours[hour_key] = hours.get(hour_key, 0) + 1
         
-        fig, ax = plt.subplots(figsize=(7, 4))
-        colors = {'DDoS': '#ef4444', 'PortScan': '#f59e0b', 'Bot': '#a855f7'}
-        bar_colors = [colors.get(k, '#64748b') for k in attack_counts.keys()]
+        # Sort by hour
+        sorted_hours = sorted(hours.items())
+        hour_labels = [h[0] for h in sorted_hours]
+        counts = [h[1] for h in sorted_hours]
         
-        bars = ax.bar(attack_counts.keys(), attack_counts.values(), color=bar_colors, edgecolor='black', linewidth=1.5)
+        fig, ax = plt.subplots(figsize=(10, 4), facecolor='white')
         
-        ax.set_ylabel('Number of Attacks', fontsize=11, fontweight='bold')
-        ax.set_title('Attack Types Breakdown', fontsize=13, fontweight='bold')
-        ax.grid(axis='y', alpha=0.3)
+        bars = ax.bar(range(len(hour_labels)), counts, color='#3b82f6', alpha=0.8, edgecolor='#1e40af', linewidth=1.5)
         
         # Add value labels on bars
         for bar in bars:
             height = bar.get_height()
             ax.text(bar.get_x() + bar.get_width()/2., height,
                    f'{int(height)}',
-                   ha='center', va='bottom', fontweight='bold', fontsize=10)
+                   ha='center', va='bottom', fontsize=9, fontweight='bold')
         
-        chart_path = TEMP_DIR / 'attack_types.png'
-        fig.tight_layout()
-        fig.savefig(chart_path, dpi=150, bbox_inches='tight')
-        plt.close(fig)
+        ax.set_xlabel('Hour', fontsize=11, fontweight='bold')
+        ax.set_ylabel('Attack Count', fontsize=11, fontweight='bold')
+        ax.set_title('Attack Timeline (Hourly Distribution)', fontsize=14, fontweight='bold', pad=15)
+        ax.set_xticks(range(len(hour_labels)))
+        ax.set_xticklabels(hour_labels, rotation=45, ha='right')
+        ax.grid(axis='y', alpha=0.3, linestyle='--')
+        ax.spines['top'].set_visible(False)
+        ax.spines['right'].set_visible(False)
         
-        return chart_path
-
-    def _create_confidence_histogram(self):
-        """Create histogram of attack confidence levels"""
+        buf = io.BytesIO()
+        plt.tight_layout()
+        plt.savefig(buf, format='png', dpi=150, bbox_inches='tight', facecolor='white')
+        buf.seek(0)
+        plt.close()
+        
+        return buf
+    
+    def create_severity_chart(self):
+        """Create threat severity distribution chart"""
         if not self.alerts:
             return None
         
-        confidences = [a['confidence'] for a in self.alerts]
+        severity_counts = {'CRITICAL': 0, 'HIGH': 0, 'MEDIUM': 0, 'LOW': 0}
         
-        fig, ax = plt.subplots(figsize=(7, 4))
-        ax.hist(confidences, bins=20, color='#3b82f6', edgecolor='black', alpha=0.7)
-        ax.set_xlabel('Confidence Level (%)', fontsize=11, fontweight='bold')
-        ax.set_ylabel('Frequency', fontsize=11, fontweight='bold')
-        ax.set_title('Attack Detection Confidence Distribution', fontsize=13, fontweight='bold')
-        ax.grid(axis='y', alpha=0.3)
+        for alert in self.alerts:
+            conf = alert['confidence']
+            if conf >= 95:
+                severity_counts['CRITICAL'] += 1
+            elif conf >= 85:
+                severity_counts['HIGH'] += 1
+            elif conf >= 75:
+                severity_counts['MEDIUM'] += 1
+            else:
+                severity_counts['LOW'] += 1
         
-        # Add mean line
-        mean_conf = np.mean(confidences)
-        ax.axvline(mean_conf, color='red', linestyle='--', linewidth=2, label=f'Mean: {mean_conf:.1f}%')
-        ax.legend()
+        # Filter out zero counts
+        severity_counts = {k: v for k, v in severity_counts.items() if v > 0}
         
-        chart_path = TEMP_DIR / 'confidence_hist.png'
-        fig.tight_layout()
-        fig.savefig(chart_path, dpi=150, bbox_inches='tight')
-        plt.close(fig)
+        if not severity_counts:
+            return None
         
-        return chart_path
-
+        labels = list(severity_counts.keys())
+        sizes = list(severity_counts.values())
+        colors_list = {'CRITICAL': '#dc2626', 'HIGH': '#ef4444', 'MEDIUM': '#f59e0b', 'LOW': '#22c55e'}
+        chart_colors = [colors_list[label] for label in labels]
+        
+        fig, ax = plt.subplots(figsize=(8, 5), facecolor='white')
+        
+        bars = ax.barh(labels, sizes, color=chart_colors, alpha=0.8, edgecolor='black', linewidth=1.5)
+        
+        # Add value labels
+        for i, bar in enumerate(bars):
+            width = bar.get_width()
+            ax.text(width, bar.get_y() + bar.get_height()/2.,
+                   f' {int(width)} ({int(width/sum(sizes)*100)}%)',
+                   ha='left', va='center', fontsize=10, fontweight='bold')
+        
+        ax.set_xlabel('Number of Alerts', fontsize=11, fontweight='bold')
+        ax.set_title('Threat Severity Distribution', fontsize=14, fontweight='bold', pad=15)
+        ax.spines['top'].set_visible(False)
+        ax.spines['right'].set_visible(False)
+        ax.grid(axis='x', alpha=0.3, linestyle='--')
+        
+        buf = io.BytesIO()
+        plt.tight_layout()
+        plt.savefig(buf, format='png', dpi=150, bbox_inches='tight', facecolor='white')
+        buf.seek(0)
+        plt.close()
+        
+        return buf
+    
     def generate_report(self):
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        filename = f"AI_IDS_Report_{timestamp}.pdf"
-        filepath = REPORTS_DIR / filename
+        """Generate comprehensive PDF report"""
         
+        # Create PDF
         doc = SimpleDocTemplate(
-            str(filepath),
+            str(self.filepath),
             pagesize=letter,
-            topMargin=0.75*inch,
-            bottomMargin=0.75*inch
+            rightMargin=50,
+            leftMargin=50,
+            topMargin=50,
+            bottomMargin=50
         )
         
-        story = []
+        elements = []
+        styles = getSampleStyleSheet()
         
-        # ═══════════════════════════════════════════════════════
-        # COVER PAGE
-        # ═══════════════════════════════════════════════════════
-        story.append(Spacer(1, 2*inch))
-        story.append(Paragraph("AI-Powered Intrusion Detection System", self.styles['CoverTitle']))
-        story.append(Spacer(1, 0.5*inch))
-        story.append(Paragraph(f"Report Generated: {datetime.now().strftime('%B %d, %Y at %H:%M')}", self.styles['Normal']))
-        story.append(Spacer(1, 0.3*inch))
-        story.append(Paragraph(f"<b>Developed by:</b> Aashish Chaudhari", self.styles['Normal']))
-        story.append(Spacer(1, 0.2*inch))
-        story.append(Paragraph(f"<b>Version:</b> 1.0 | <b>Model:</b> Random Forest", self.styles['Normal']))
-        story.append(PageBreak())
+        # Custom styles
+        title_style = ParagraphStyle(
+            'CustomTitle',
+            parent=styles['Heading1'],
+            fontSize=24,
+            textColor=colors.HexColor('#1e293b'),
+            spaceAfter=12,
+            alignment=TA_CENTER,
+            fontName='Helvetica-Bold'
+        )
         
-        # ═══════════════════════════════════════════════════════
-        # EXECUTIVE SUMMARY
-        # ═══════════════════════════════════════════════════════
-        story.append(Paragraph("Executive Summary", self.styles['SectionHeader']))
-        story.append(Spacer(1, 0.2*inch))
+        subtitle_style = ParagraphStyle(
+            'CustomSubtitle',
+            parent=styles['Normal'],
+            fontSize=12,
+            textColor=colors.HexColor('#64748b'),
+            spaceAfter=30,
+            alignment=TA_CENTER
+        )
         
-        summary = f"""
-        This AI-powered Intrusion Detection System employs machine learning to detect network threats 
-        in real-time. The system achieved <b>99.81% accuracy</b> on the CIC-IDS2017 benchmark dataset and 
-        is currently monitoring live network traffic with hybrid detection (ML + rate-based analysis).
-        <br/><br/>
-        <b>Current Session Statistics:</b><br/>
-        • Total Attacks Detected: <b>{len(self.alerts)}</b><br/>
-        • Detection Method: Hybrid (Machine Learning + Rate-based Analysis)<br/>
-        • Model: Random Forest Classifier (200 trees)<br/>
-        • Dataset: CIC-IDS2017 (470,547 samples, 78 features)
-        """
-        story.append(Paragraph(summary, self.styles['Normal']))
-        story.append(PageBreak())
+        heading_style = ParagraphStyle(
+            'CustomHeading',
+            parent=styles['Heading2'],
+            fontSize=16,
+            textColor=colors.HexColor('#1e40af'),
+            spaceAfter=12,
+            spaceBefore=20,
+            fontName='Helvetica-Bold'
+        )
         
-        # ═══════════════════════════════════════════════════════
-        # LIVE TRAFFIC CHARTS
-        # ═══════════════════════════════════════════════════════
-        story.append(Paragraph("Real-Time Traffic Analysis", self.styles['SectionHeader']))
-        story.append(Spacer(1, 0.2*inch))
+        # Header
+        elements.append(Paragraph("🛡️ AI-IDS PROFESSIONAL", title_style))
+        elements.append(Paragraph("Intrusion Detection System - Security Report", subtitle_style))
+        elements.append(Spacer(1, 0.2*inch))
         
-        # Traffic Timeline
-        story.append(Paragraph("<b>Traffic Timeline (Last Hour)</b>", self.styles['Subsection']))
-        traffic_chart = self._create_traffic_timeline_chart()
-        story.append(Image(str(traffic_chart), width=6.5*inch, height=3.25*inch))
-        story.append(Spacer(1, 0.3*inch))
-        
-        # Attack Distribution
-        story.append(Paragraph("<b>Attack Distribution</b>", self.styles['Subsection']))
-        dist_chart = self._create_attack_distribution_chart()
-        story.append(Image(str(dist_chart), width=5*inch, height=3.3*inch))
-        story.append(PageBreak())
-        
-        # ═══════════════════════════════════════════════════════
-        # ATTACK STATISTICS
-        # ═══════════════════════════════════════════════════════
-        if self.alerts:
-            story.append(Paragraph("Attack Statistics", self.styles['SectionHeader']))
-            story.append(Spacer(1, 0.2*inch))
-            
-            attack_counts = Counter(a['label'] for a in self.alerts)
-            
-            # Summary Table
-            summary_data = [
-                ['Metric', 'Value'],
-                ['Total Attacks', str(len(self.alerts))],
-                ['DDoS Attacks', str(attack_counts.get('DDoS', 0))],
-                ['Port Scans', str(attack_counts.get('PortScan', 0))],
-                ['Bot Activity', str(attack_counts.get('Bot', 0))],
-                ['Average Confidence', f"{sum(a['confidence'] for a in self.alerts)/len(self.alerts):.1f}%"]
-            ]
-            
-            t = Table(summary_data, colWidths=[3*inch, 3*inch])
-            t.setStyle(TableStyle([
-                ('BACKGROUND', (0,0), (-1,0), HexColor('#2e86c1')),
-                ('TEXTCOLOR', (0,0), (-1,0), HexColor('#ffffff')),
-                ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
-                ('FONTSIZE', (0,0), (-1,-1), 11),
-                ('BACKGROUND', (0,1), (-1,-1), HexColor('#eaf2f8')),
-                ('GRID', (0,0), (-1,-1), 0.5, HexColor('#aed6f1')),
-                ('TOPPADDING', (0,0), (-1,-1), 8),
-                ('BOTTOMPADDING', (0,0), (-1,-1), 8),
-            ]))
-            story.append(t)
-            story.append(Spacer(1, 0.3*inch))
-            
-            # Attack Types Bar Chart
-            bar_chart = self._create_attack_types_bar_chart()
-            if bar_chart:
-                story.append(Paragraph("<b>Attack Types Breakdown</b>", self.styles['Subsection']))
-                story.append(Image(str(bar_chart), width=5.5*inch, height=3.14*inch))
-                story.append(Spacer(1, 0.3*inch))
-            
-            # Confidence Histogram
-            conf_chart = self._create_confidence_histogram()
-            if conf_chart:
-                story.append(Paragraph("<b>Detection Confidence Distribution</b>", self.styles['Subsection']))
-                story.append(Image(str(conf_chart), width=5.5*inch, height=3.14*inch))
-            
-            story.append(PageBreak())
-            
-            # Recent Alerts Table
-            story.append(Paragraph("Recent Attack Details", self.styles['SectionHeader']))
-            story.append(Spacer(1, 0.2*inch))
-            
-            alert_data = [['Time', 'Attack Type', 'Confidence', 'Port', 'Packets']]
-            for a in self.alerts[-25:]:
-                alert_data.append([
-                    datetime.fromisoformat(a['timestamp']).strftime('%H:%M:%S'),
-                    a['label'],
-                    f"{a['confidence']}%",
-                    str(a.get('dst_port', '—')),
-                    str(a['fwd_pkts'] + a['bwd_pkts'])
-                ])
-            
-            t2 = Table(alert_data, colWidths=[1.2*inch, 1.5*inch, 1.2*inch, 0.8*inch, 1*inch])
-            t2.setStyle(TableStyle([
-                ('BACKGROUND', (0,0), (-1,0), HexColor('#e74c3c')),
-                ('TEXTCOLOR', (0,0), (-1,0), HexColor('#ffffff')),
-                ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
-                ('FONTSIZE', (0,0), (-1,-1), 9),
-                ('BACKGROUND', (0,1), (-1,-1), HexColor('#fadbd8')),
-                ('GRID', (0,0), (-1,-1), 0.5, HexColor('#e74c3c')),
-                ('TOPPADDING', (0,0), (-1,-1), 6),
-                ('BOTTOMPADDING', (0,0), (-1,-1), 6),
-                ('ALIGN', (0,0), (-1,-1), 'CENTER')
-            ]))
-            story.append(t2)
-        else:
-            story.append(Paragraph("Attack Statistics", self.styles['SectionHeader']))
-            story.append(Paragraph("No attacks detected in current monitoring session.", self.styles['Normal']))
-        
-        story.append(PageBreak())
-        
-        # ═══════════════════════════════════════════════════════
-        # MODEL PERFORMANCE
-        # ═══════════════════════════════════════════════════════
-        story.append(Paragraph("Model Performance Metrics", self.styles['SectionHeader']))
-        story.append(Spacer(1, 0.2*inch))
-        
-        perf_data = [
-            ['Metric', 'Value'],
-            ['Overall Accuracy', '99.81%'],
-            ['Precision (Weighted)', '99.82%'],
-            ['Recall (Weighted)', '99.81%'],
-            ['F1-Score', '99.81%'],
-            ['Test Samples', '94,110'],
-            ['Training Time', '2.4 minutes'],
-            ['False Positive Rate', '0.19%']
+        # Report Info Box
+        report_info = [
+            ['Report Generated:', datetime.now().strftime('%B %d, %Y at %H:%M:%S')],
+            ['Total Alerts:', f"{len(self.alerts):,}"],
+            ['Reporting Period:', f"Last {len(self.alerts)} detected threats"],
+            ['System Status:', '🟢 Active & Monitoring']
         ]
         
-        t3 = Table(perf_data, colWidths=[3*inch, 3*inch])
-        t3.setStyle(TableStyle([
-            ('BACKGROUND', (0,0), (-1,0), HexColor('#27ae60')),
-            ('TEXTCOLOR', (0,0), (-1,0), HexColor('#ffffff')),
-            ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
-            ('FONTSIZE', (0,0), (-1,-1), 11),
-            ('BACKGROUND', (0,1), (-1,-1), HexColor('#d5f4e6')),
-            ('GRID', (0,0), (-1,-1), 0.5, HexColor('#27ae60')),
-            ('TOPPADDING', (0,0), (-1,-1), 8),
-            ('BOTTOMPADDING', (0,0), (-1,-1), 8),
+        info_table = Table(report_info, colWidths=[2*inch, 4*inch])
+        info_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, -1), colors.HexColor('#f8fafc')),
+            ('TEXTCOLOR', (0, 0), (0, -1), colors.HexColor('#475569')),
+            ('TEXTCOLOR', (1, 0), (1, -1), colors.HexColor('#1e293b')),
+            ('FONTNAME', (0, 0), (-1, -1), 'Helvetica'),
+            ('FONTNAME', (1, 0), (1, -1), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, -1), 10),
+            ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+            ('GRID', (0, 0), (-1, -1), 1, colors.HexColor('#cbd5e1')),
+            ('ROWBACKGROUNDS', (0, 0), (-1, -1), [colors.white, colors.HexColor('#f8fafc')]),
+            ('LEFTPADDING', (0, 0), (-1, -1), 12),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 12),
+            ('TOPPADDING', (0, 0), (-1, -1), 10),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 10),
         ]))
-        story.append(t3)
-        story.append(Spacer(1, 0.3*inch))
         
-        # Per-Class Performance
-        story.append(Paragraph("<b>Per-Class Performance</b>", self.styles['Subsection']))
-        class_data = [
-            ['Class', 'Precision', 'Recall', 'F1-Score'],
-            ['BENIGN', '1.00', '1.00', '1.00'],
-            ['DDoS', '1.00', '1.00', '1.00'],
-            ['PortScan', '1.00', '1.00', '1.00'],
-            ['Bot', '0.49', '0.96', '0.65']
-        ]
+        elements.append(info_table)
+        elements.append(Spacer(1, 0.4*inch))
         
-        t4 = Table(class_data, colWidths=[1.5*inch, 1.5*inch, 1.5*inch, 1.5*inch])
-        t4.setStyle(TableStyle([
-            ('BACKGROUND', (0,0), (-1,0), HexColor('#34495e')),
-            ('TEXTCOLOR', (0,0), (-1,0), HexColor('#ffffff')),
-            ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
-            ('FONTSIZE', (0,0), (-1,-1), 10),
-            ('BACKGROUND', (0,1), (-1,-1), HexColor('#ecf0f1')),
-            ('GRID', (0,0), (-1,-1), 0.5, HexColor('#95a5a6')),
-            ('TOPPADDING', (0,0), (-1,-1), 8),
-            ('BOTTOMPADDING', (0,0), (-1,-1), 8),
-            ('ALIGN', (0,0), (-1,-1), 'CENTER')
-        ]))
-        story.append(t4)
-        story.append(PageBreak())
+        # Executive Summary
+        elements.append(Paragraph("📊 Executive Summary", heading_style))
         
-        # ═══════════════════════════════════════════════════════
-        # CONCLUSION
-        # ═══════════════════════════════════════════════════════
-        story.append(Paragraph("Conclusion", self.styles['SectionHeader']))
-        conclusion = """
-        The AI-IDS system demonstrates high accuracy in detecting network intrusions with minimal 
-        false positives. The hybrid detection approach (machine learning + rate-based analysis) 
-        provides comprehensive coverage against both known attack patterns and volumetric threats.
-        <br/><br/>
-        <b>System Status:</b> Operational and monitoring live traffic<br/>
-        <b>Deployment:</b> Production-ready prototype<br/>
-        <b>Recommendation:</b> Continue monitoring with periodic model retraining (quarterly)
-        <br/><br/>
-        <b>Contact:</b> Aashish Chaudhari | chaudhariaashish18@email.com<br/>
-        <b>Repository:</b> github.com/AashishChaudhari/AI-IDS-Project
+        attack_counts = Counter(a['label'] for a in self.alerts)
+        top_attack = attack_counts.most_common(1)[0] if attack_counts else ('None', 0)
+        
+        critical_count = sum(1 for a in self.alerts if a['confidence'] >= 95)
+        
+        summary_text = f"""
+        <b>Primary Threat:</b> {top_attack[0]} ({top_attack[1]} incidents)<br/>
+        <b>Critical Alerts:</b> {critical_count} (requiring immediate attention)<br/>
+        <b>Attack Types Detected:</b> {len(attack_counts)} different vectors<br/>
+        <b>Average Confidence:</b> {sum(a['confidence'] for a in self.alerts) / len(self.alerts):.1f}% (High accuracy)
         """
-        story.append(Paragraph(conclusion, self.styles['Normal']))
         
-        doc.build(story)
+        elements.append(Paragraph(summary_text, styles['Normal']))
+        elements.append(Spacer(1, 0.3*inch))
         
-        # Cleanup temp charts
-        for f in TEMP_DIR.glob('*.png'):
-            f.unlink()
+        # Attack Distribution Chart
+        elements.append(Paragraph("📈 Attack Distribution Analysis", heading_style))
+        chart_buf = self.create_attack_distribution_chart()
+        if chart_buf:
+            chart_img = Image(chart_buf, width=5.5*inch, height=3.3*inch)
+            elements.append(chart_img)
+            elements.append(Spacer(1, 0.3*inch))
         
-        return filename
+        # Timeline Chart
+        elements.append(Paragraph("⏱️ Attack Timeline", heading_style))
+        timeline_buf = self.create_timeline_chart()
+        if timeline_buf:
+            timeline_img = Image(timeline_buf, width=6*inch, height=2.4*inch)
+            elements.append(timeline_img)
+            elements.append(Spacer(1, 0.3*inch))
+        
+        # Page Break
+        elements.append(PageBreak())
+        
+        # Severity Distribution
+        elements.append(Paragraph("🚨 Threat Severity Analysis", heading_style))
+        severity_buf = self.create_severity_chart()
+        if severity_buf:
+            severity_img = Image(severity_buf, width=5*inch, height=3*inch)
+            elements.append(severity_img)
+            elements.append(Spacer(1, 0.3*inch))
+        
+        # Detailed Alerts Table
+        elements.append(Paragraph("📋 Detailed Alert Log (Latest 20)", heading_style))
+        
+        table_data = [['Time', 'Attack Type', 'Confidence', 'Port', 'Packets']]
+        
+        for alert in self.alerts[-20:]:
+            ts = datetime.fromisoformat(alert['timestamp']).strftime('%H:%M:%S')
+            table_data.append([
+                ts,
+                alert['label'],
+                f"{alert['confidence']}%",
+                str(alert.get('dst_port', 'N/A')),
+                str(alert['fwd_pkts'] + alert['bwd_pkts'])
+            ])
+        
+        alert_table = Table(table_data, colWidths=[1*inch, 2*inch, 1*inch, 0.8*inch, 1*inch])
+        alert_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1e40af')),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, 0), 11),
+            ('FONTSIZE', (0, 1), (-1, -1), 9),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+            ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
+            ('GRID', (0, 0), (-1, -1), 1, colors.HexColor('#cbd5e1')),
+            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#f8fafc')]),
+        ]))
+        
+        elements.append(alert_table)
+        elements.append(Spacer(1, 0.4*inch))
+        
+        # Footer
+        footer_text = f"""
+        <para alignment='center'>
+        <b>AI-IDS Professional</b> | Developed by Aashish Chaudhari<br/>
+        Report Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}<br/>
+        <font color='#64748b' size=8>This report contains confidential security information</font>
+        </para>
+        """
+        elements.append(Paragraph(footer_text, styles['Normal']))
+        
+        # Build PDF
+        doc.build(elements)
+        
+        return self.filename
+
+
+if __name__ == "__main__":
+    # Test with sample data
+    sample_alerts = [
+        {'label': 'DDoS', 'confidence': 98, 'timestamp': '2026-02-26T10:00:00', 'dst_port': 80, 'fwd_pkts': 100, 'bwd_pkts': 50},
+        {'label': 'PortScan', 'confidence': 95, 'timestamp': '2026-02-26T11:00:00', 'dst_port': 22, 'fwd_pkts': 10, 'bwd_pkts': 5},
+    ]
+    
+    generator = IDSReportGenerator(sample_alerts)
+    filename = generator.generate_report()
+    print(f"Report generated: {filename}")

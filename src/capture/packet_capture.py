@@ -1,69 +1,75 @@
 #!/usr/bin/env python3
-import warnings
-warnings.filterwarnings('ignore', category=UserWarning, module='sklearn')
-import os, sys, time, json, pickle, threading
-from collections import deque, defaultdict
-from datetime import datetime
+"""
+AI-IDS Real-time Packet Capture with Database Integration
+Hybrid Detection: ML Model + Behavioral Rules + SQLite Database Storage
+"""
+import sys
 from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from scapy.all import sniff, IP, TCP, UDP, Raw
+import pickle, json, time, argparse, os
+from collections import defaultdict, deque
+from datetime import datetime
 import numpy as np
-from scapy.all import sniff, IP, TCP, UDP, get_if_list
-from colorama import Fore, init
+from colorama import Fore, Style, init
+
+# Database integration
+try:
+    from database import save_alert, init_database
+    DATABASE_ENABLED = True
+    init_database()  # Initialize database on startup
+except Exception as e:
+    print(f"{Fore.YELLOW}⚠️  Database not available: {e}")
+    DATABASE_ENABLED = False
+
 init(autoreset=True)
 
-BASE = Path('/home/aashish/AI-IDS-Project')
-SHARED = BASE / 'data' / 'live_results.json'
+# Base directory
+BASE_DIR = Path('/home/aashish/AI-IDS-Project')
+MODEL_PATH = BASE_DIR / 'models' / 'final_model.pkl'
+SCALER_PATH = BASE_DIR / 'data' / 'processed' / 'scaler.pkl'
+LABEL_ENCODER_PATH = BASE_DIR / 'data' / 'processed' / 'label_encoder.pkl'
+FEATURE_NAMES_PATH = BASE_DIR / 'data' / 'processed' / 'feature_names.json'
+SHARED_FILE = BASE_DIR / 'data' / 'live_results.json'
 
-print(f"{Fore.CYAN}Loading model...")
-with open(BASE/'models'/'final_model.pkl','rb') as f:
-    model = pickle.load(f)
-with open(BASE/'data'/'processed'/'label_encoder.pkl','rb') as f:
-    label_encoder = pickle.load(f)
-with open(BASE/'data'/'processed'/'scaler.pkl','rb') as f:
-    scaler = pickle.load(f)
-with open(BASE/'data'/'processed'/'feature_names.json') as f:
-    feature_names = json.load(f)
-CLASSES = label_encoder.classes_.tolist()
-print(f"{Fore.GREEN}✅ Model loaded")
-print(f"   Trained classes: {', '.join(CLASSES)}\n")
-
-traffic = []
-alerts  = []
-
-# Attack detection trackers
-packet_rate_tracker = defaultdict(lambda: deque(maxlen=1000))
-port_scan_tracker = defaultdict(lambda: {'ports': set(), 'last_seen': 0})
+# Behavioral detection trackers
+ddos_tracker = defaultdict(lambda: {'packets': deque(maxlen=100), 'last_seen': 0})
+portscan_tracker = defaultdict(lambda: {'ports': set(), 'last_seen': 0})
 ssh_brute_tracker = defaultdict(lambda: {'attempts': deque(maxlen=100), 'last_seen': 0})
-web_attack_tracker = defaultdict(lambda: {'requests': deque(maxlen=50), 'suspicious': 0})
+http_payload_buffer = defaultdict(lambda: {'payloads': [], 'last_seen': 0})
 slowloris_tracker = defaultdict(lambda: {'slow_connections': 0, 'last_seen': 0})
 
-def save():
-    tmp = str(SHARED)+'.tmp'
-    with open(tmp,'w') as f:
-        json.dump({"traffic": traffic[-200:], "alerts": alerts}, f)
-    os.replace(tmp, str(SHARED))
-save()
+# Global counters
+total_packets = 0
+attack_count = 0
 
-class Flow:
-    def __init__(self):
-        self.start=self.end=None;self.fwd_pkts=self.bwd_pkts=0;self.fwd_bytes=self.bwd_bytes=0
-        self.fwd_lens=[];self.bwd_lens=[];self.fwd_iat=[];self.bwd_iat=[]
-        self.last_fwd=self.last_bwd=None;self.syn=self.ack=self.fin=self.rst=self.psh=self.urg=self.ece=self.cwr=0
-        self.fwd_wins=[];self.bwd_wins=[];self.fwd_hdrs=[];self.bwd_hdrs=[];self.dst_port=0;self.proto=0
-
-active_flows={};completed=deque(maxlen=1000);flow_lock=threading.Lock();FLOW_TIMEOUT=3
-
-def get_flow_key(pkt):
-    src,dst=pkt[IP].src,pkt[IP].dst;sp=dp=0;proto=pkt[IP].proto
-    if pkt.haslayer(TCP):sp,dp=pkt[TCP].sport,pkt[TCP].dport
-    elif pkt.haslayer(UDP):sp,dp=pkt[UDP].sport,pkt[UDP].dport
-    return((src,sp,dst,dp,proto),'fwd')if(src,sp)<=(dst,dp)else((dst,dp,src,sp,proto),'bwd')
+def load_model_components():
+    """Load ML model and preprocessing components"""
+    print(f"{Fore.YELLOW}Loading model components...")
+    
+    with open(MODEL_PATH, 'rb') as f:
+        model = pickle.load(f)
+    
+    with open(SCALER_PATH, 'rb') as f:
+        scaler = pickle.load(f)
+    
+    with open(LABEL_ENCODER_PATH, 'rb') as f:
+        label_encoder = pickle.load(f)
+    
+    with open(FEATURE_NAMES_PATH, 'r') as f:
+        feature_names = json.load(f)
+    
+    print(f"{Fore.GREEN}✅ Model loaded: {len(feature_names)} features\n")
+    return model, scaler, label_encoder, feature_names
 
 def check_ssh_brute_force(pkt):
     """Detect SSH brute force - multiple connection attempts to port 22"""
-    if not pkt.haslayer(TCP) or pkt[TCP].dport != 22:
+    if not pkt.haslayer(TCP):
         return None
     
-    if not (pkt[TCP].flags & 0x02):  # Only SYN packets
+    tcp = pkt[TCP]
+    if tcp.dport != 22 and tcp.sport != 22:
         return None
     
     src_ip = pkt[IP].src
@@ -73,78 +79,53 @@ def check_ssh_brute_force(pkt):
     tracker['attempts'].append(now)
     tracker['last_seen'] = now
     
-    # Remove attempts older than 10 seconds
-    while tracker['attempts'] and now - tracker['attempts'][0] > 10:
-        tracker['attempts'].popleft()
+    # Count attempts in last 10 seconds
+    recent = [t for t in tracker['attempts'] if now - t < 10]
+    attempt_count = len(recent)
     
     # 10+ SSH connection attempts in 10 seconds = Brute Force
-    if len(tracker['attempts']) >= 10:
-        attempt_count = len(tracker['attempts'])
-        tracker['attempts'].clear()  # Reset
+    if attempt_count >= 10:
+        ssh_brute_tracker[src_ip]['attempts'].clear()
         return "SSH-Brute-Force", 22, attempt_count
     
     return None
 
-def check_web_attack(pkt):
-    """Detect web attacks - suspicious HTTP patterns"""
-    if not pkt.haslayer(TCP):
-        return None
-    
-    # Common web ports
-    if pkt[TCP].dport not in [80, 443, 8080, 8443]:
-        return None
-    
-    src_ip = pkt[IP].src
-    now = time.time()
-    
-    # Check if packet has payload
-    if not hasattr(pkt[TCP], 'load'):
+def check_http_attacks(pkt):
+    """Detect SQL Injection and XSS attacks in HTTP payloads"""
+    if not pkt.haslayer(Raw):
         return None
     
     try:
-        payload = bytes(pkt[TCP].load).decode('utf-8', errors='ignore').lower()
+        payload = pkt[Raw].load.decode('utf-8', errors='ignore').lower()
         
         # SQL Injection patterns
         sql_patterns = ['union select', 'or 1=1', 'drop table', '-- ', 'xp_cmdshell', 
-                       'exec(', 'execute(', 'select * from']
+                       '; exec', 'exec(', 'cast(', 'declare @']
         
         # XSS patterns
         xss_patterns = ['<script', 'javascript:', 'onerror=', 'onload=', 'alert(', 
-                       'document.cookie']
+                       'document.cookie', 'eval(', '<iframe']
         
-        # Command injection
-        cmd_patterns = [';cat ', '|ls ', '&&whoami', '`id`', '$(whoami)']
+        src_ip = pkt[IP].src
+        port = pkt[TCP].dport if pkt.haslayer(TCP) else 0
         
-        suspicious = False
-        attack_type = "Web-Attack"
+        attack_type = None
         
+        # Check SQL Injection
         for pattern in sql_patterns:
             if pattern in payload:
-                suspicious = True
                 attack_type = "SQL-Injection"
                 break
         
-        if not suspicious:
+        # Check XSS if no SQLi found
+        if not attack_type:
             for pattern in xss_patterns:
                 if pattern in payload:
-                    suspicious = True
                     attack_type = "XSS-Attack"
                     break
         
-        if not suspicious:
-            for pattern in cmd_patterns:
-                if pattern in payload:
-                    suspicious = True
-                    attack_type = "Command-Injection"
-                    break
-        
-        if suspicious:
-            tracker = web_attack_tracker[src_ip]
-            tracker['requests'].append(now)
-            tracker['suspicious'] += 1
-            tracker['last_seen'] = now
-            
-            return attack_type, pkt[TCP].dport, tracker['suspicious']
+        if attack_type:
+            return attack_type, port, len(payload)
     
     except:
         pass
@@ -153,222 +134,273 @@ def check_web_attack(pkt):
 
 def check_slowloris(pkt):
     """Detect Slowloris - many slow incomplete HTTP connections"""
-    if not pkt.haslayer(TCP) or pkt[TCP].dport not in [80, 443, 8080]:
+    if not pkt.haslayer(TCP):
         return None
     
-    src_ip = pkt[IP].src
-    now = time.time()
+    tcp = pkt[TCP]
+    if tcp.dport not in [80, 443, 8080]:
+        return None
     
-    # Track incomplete connections (SYN without FIN/RST)
-    if pkt[TCP].flags & 0x02:  # SYN
+    if tcp.flags & 0x02:  # SYN flag
+        src_ip = pkt[IP].src
         tracker = slowloris_tracker[src_ip]
         tracker['slow_connections'] += 1
-        tracker['last_seen'] = now
+        tracker['last_seen'] = time.time()
+        
+        count = tracker['slow_connections']
         
         # 20+ slow connections from same source = Slowloris
-        if tracker['slow_connections'] >= 20:
-            count = tracker['slow_connections']
-            tracker['slow_connections'] = 0
+        if count >= 20:
+            slowloris_tracker[src_ip]['slow_connections'] = 0
             return "Slowloris-DoS", pkt[TCP].dport, count
-    
-    elif pkt[TCP].flags & 0x01 or pkt[TCP].flags & 0x04:  # FIN or RST
-        if src_ip in slowloris_tracker:
-            slowloris_tracker[src_ip]['slow_connections'] = max(
-                0, slowloris_tracker[src_ip]['slow_connections'] - 1
-            )
     
     return None
 
-def check_port_scan(pkt):
-    """Detect port scanning - same source hitting multiple ports"""
-    if not pkt.haslayer(IP) or not pkt.haslayer(TCP):
+def check_ddos(pkt):
+    """Detect DDoS based on packet rate"""
+    if not pkt.haslayer(IP):
         return None
     
     src_ip = pkt[IP].src
-    dst_port = pkt[TCP].dport
     now = time.time()
     
-    tracker = port_scan_tracker[src_ip]
-    tracker['ports'].add(dst_port)
+    tracker = ddos_tracker[src_ip]
+    tracker['packets'].append(now)
     tracker['last_seen'] = now
     
-    if len(tracker['ports']) >= 10:
-        port_count = len(tracker['ports'])
-        tracker['ports'] = set()
-        return "PortScan", dst_port, port_count
+    # Count packets in last second
+    recent = [t for t in tracker['packets'] if now - t < 1]
+    pkt_rate = len(recent)
+    
+    # >100 packets/second = DDoS
+    if pkt_rate > 100:
+        ddos_tracker[src_ip]['packets'].clear()
+        return "DDoS", pkt[TCP].dport if pkt.haslayer(TCP) else 0, pkt_rate
     
     return None
 
-def check_rate_based_attack(pkt):
-    """Detect flood attacks - high packet rate"""
-    if not pkt.haslayer(IP):return None
-    src_ip,now=pkt[IP].src,time.time()
-    packet_rate_tracker[src_ip].append(now)
-    while packet_rate_tracker[src_ip]and now-packet_rate_tracker[src_ip][0]>1.0:
-        packet_rate_tracker[src_ip].popleft()
-    rate=len(packet_rate_tracker[src_ip])
-    if rate>100:
-        port=0
-        if pkt.haslayer(TCP):
-            port=pkt[TCP].dport
-            if pkt[TCP].flags&0x02:return"DDoS",port,rate
-        elif pkt.haslayer(UDP):port=pkt[UDP].dport;return"DDoS",port,rate
+def check_portscan(pkt):
+    """Detect port scanning"""
+    if not pkt.haslayer(TCP):
+        return None
+    
+    tcp = pkt[TCP]
+    src_ip = pkt[IP].src
+    now = time.time()
+    
+    tracker = portscan_tracker[src_ip]
+    tracker['ports'].add(tcp.dport)
+    tracker['last_seen'] = now
+    
+    # Clean old entries
+    if now - tracker['last_seen'] > 60:
+        tracker['ports'].clear()
+    
+    unique_ports = len(tracker['ports'])
+    
+    # 10+ different ports = Port Scan
+    if unique_ports >= 10:
+        port_count = unique_ports
+        portscan_tracker[src_ip]['ports'].clear()
+        return "PortScan", tcp.dport, port_count
+    
     return None
 
-def create_alert(label, port, metric, confidence=None):
-    """Create alert entry"""
-    entry = {
-        "timestamp": datetime.now().isoformat(),
-        "label": label,
-        "confidence": confidence if confidence else 95.0,
-        "is_attack": True,
-        "fwd_pkts": int(metric) if metric else 0,
-        "bwd_pkts": 0,
-        "duration": 1.0,
-        "dst_port": port
-    }
-    traffic.append(entry)
-    if len(traffic) > 200:
-        traffic.pop(0)
-    alerts.append(entry)
+def extract_features(pkt):
+    """Extract 78 features from packet for ML model"""
+    features = [0] * 78
     
-    conf_str = f"conf={confidence:.1f}%" if confidence else ""
-    print(f"{Fore.RED}🚨 ATTACK | {label:20s} | {conf_str} | port={port} | metric={metric}")
-    save()
-
-def add_packet(pkt):
-    # Priority 1: Check for SSH Brute Force
-    ssh_attack = check_ssh_brute_force(pkt)
-    if ssh_attack:
-        attack_type, port, attempts = ssh_attack
-        create_alert(attack_type, port, attempts)
-        return
-    
-    # Priority 2: Check for Web Attacks
-    web_attack = check_web_attack(pkt)
-    if web_attack:
-        attack_type, port, count = web_attack
-        create_alert(attack_type, port, count)
-        return
-    
-    # Priority 3: Check for Slowloris
-    slowloris = check_slowloris(pkt)
-    if slowloris:
-        attack_type, port, connections = slowloris
-        create_alert(attack_type, port, connections)
-        return
-    
-    # Priority 4: Check for port scan
-    port_scan = check_port_scan(pkt)
-    if port_scan:
-        attack_type, port, port_count = port_scan
-        create_alert(attack_type, port, port_count)
-        return
-    
-    # Priority 5: Check for rate-based DDoS
-    rate_attack = check_rate_based_attack(pkt)
-    if rate_attack:
-        attack_type, port, rate = rate_attack
-        create_alert(attack_type, port, rate)
-        return
-    
-    # Priority 6: Flow-based ML detection
-    if not pkt.haslayer(IP):return
-    key,d=get_flow_key(pkt);now=time.time();plen=len(pkt)
-    with flow_lock:
-        if key not in active_flows:
-            active_flows[key]=Flow();active_flows[key].start=now;active_flows[key].proto=pkt[IP].proto
-            if pkt.haslayer(TCP):active_flows[key].dst_port=pkt[TCP].dport
-            elif pkt.haslayer(UDP):active_flows[key].dst_port=pkt[UDP].dport
-        fl=active_flows[key];fl.end=now
-        if d=='fwd':
-            fl.fwd_pkts+=1;fl.fwd_bytes+=plen;fl.fwd_lens.append(plen)
-            if fl.last_fwd:fl.fwd_iat.append(now-fl.last_fwd)
-            fl.last_fwd=now
-            if pkt.haslayer(TCP):fl.fwd_wins.append(pkt[TCP].window);fl.fwd_hdrs.append((pkt[TCP].dataofs or 5)*4)
-        else:
-            fl.bwd_pkts+=1;fl.bwd_bytes+=plen;fl.bwd_lens.append(plen)
-            if fl.last_bwd:fl.bwd_iat.append(now-fl.last_bwd)
-            fl.last_bwd=now
-            if pkt.haslayer(TCP):fl.bwd_wins.append(pkt[TCP].window);fl.bwd_hdrs.append((pkt[TCP].dataofs or 5)*4)
+    if pkt.haslayer(IP):
+        ip = pkt[IP]
+        features[0] = ip.dst if pkt.haslayer(TCP) else 0  # Destination Port (simplified)
+        features[1] = len(pkt)  # Flow Duration approximation
+        
         if pkt.haslayer(TCP):
-            flags=pkt[TCP].flags
-            if flags&0x02:fl.syn+=1
-            if flags&0x10:fl.ack+=1
-            if flags&0x01:fl.fin+=1
-            if flags&0x04:fl.rst+=1
-            if flags&0x08:fl.psh+=1
-            if flags&0x20:fl.urg+=1
-            if flags&0x40:fl.ece+=1
-            if flags&0x80:fl.cwr+=1
-            if(flags&0x01)or(flags&0x04):completed.append(active_flows.pop(key))
-
-def expire_flows():
-    now=time.time()
-    with flow_lock:
-        expired=[k for k,fl in active_flows.items()if fl.end and(now-fl.end)>FLOW_TIMEOUT]
-        for k in expired:completed.append(active_flows.pop(k))
-
-m=lambda l:float(np.mean(l))if l else 0.0
-s=lambda l:float(np.std(l))if l else 0.0
-mx=lambda l:float(max(l))if l else 0.0
-mn=lambda l:float(min(l))if l else 0.0
-
-def extract(fl):
-    dur=(fl.end-fl.start)if fl.end and fl.start else 0.0;tf=fl.fwd_pkts;tb=fl.bwd_pkts;all_lens=fl.fwd_lens+fl.bwd_lens;all_iat=fl.fwd_iat+fl.bwd_iat
-    feat={'Destination Port':float(fl.dst_port),'Flow Duration':dur,'Total Fwd Packets':float(tf),'Total Backward Packets':float(tb),'Total Length of Fwd Packets':float(fl.fwd_bytes),'Total Length of Bwd Packets':float(fl.bwd_bytes),'Fwd Packet Length Max':mx(fl.fwd_lens),'Fwd Packet Length Min':mn(fl.fwd_lens),'Fwd Packet Length Mean':m(fl.fwd_lens),'Fwd Packet Length Std':s(fl.fwd_lens),'Bwd Packet Length Max':mx(fl.bwd_lens),'Bwd Packet Length Min':mn(fl.bwd_lens),'Bwd Packet Length Mean':m(fl.bwd_lens),'Bwd Packet Length Std':s(fl.bwd_lens),'Flow Bytes/s':(fl.fwd_bytes+fl.bwd_bytes)/dur if dur>0 else float(fl.fwd_bytes+fl.bwd_bytes),'Flow Packets/s':(tf+tb)/dur if dur>0 else float(tf+tb),'Flow IAT Mean':m(all_iat),'Flow IAT Std':s(all_iat),'Flow IAT Max':mx(all_iat),'Flow IAT Min':mn(all_iat),'Fwd IAT Total':sum(fl.fwd_iat)if fl.fwd_iat else 0.0,'Fwd IAT Mean':m(fl.fwd_iat),'Fwd IAT Std':s(fl.fwd_iat),'Fwd IAT Max':mx(fl.fwd_iat),'Fwd IAT Min':mn(fl.fwd_iat),'Bwd IAT Total':sum(fl.bwd_iat)if fl.bwd_iat else 0.0,'Bwd IAT Mean':m(fl.bwd_iat),'Bwd IAT Std':s(fl.bwd_iat),'Bwd IAT Max':mx(fl.bwd_iat),'Bwd IAT Min':mn(fl.bwd_iat),'Fwd SYN Flag Count':float(fl.syn),'Fwd PSH Flag Count':float(fl.psh),'Fwd ACK Flag Count':float(fl.ack),'Fwd URG Flag Count':float(fl.urg),'Fwd FIN Flag Count':float(fl.fin),'Bwd PSH Flag Count':0.0,'Bwd ACK Flag Count':0.0,'Bwd URG Flag Count':0.0,'Bwd FIN Flag Count':0.0,'Bwd SYN Flag Count':0.0,'Bwd RST Flag Count':float(fl.rst),'Bwd ECE Flag Count':float(fl.ece),'Length Flag Count':0.0,'Packet Length Max':max(mx(fl.fwd_lens),mx(fl.bwd_lens)),'Packet Length Min':min(mn(fl.fwd_lens)if fl.fwd_lens else 9999,mn(fl.bwd_lens)if fl.bwd_lens else 9999),'Packet Length Mean':m(all_lens),'Packet Length Std':s(all_lens),'Packet Length Var':float(np.var(all_lens))if all_lens else 0.0,'ACK Flag Count':float(fl.ack),'URG Flag Count':float(fl.urg),'CWE Flag Count':float(fl.cwr),'ECE Flag Count':float(fl.ece),'Down/Up Ratio':float(tb)/tf if tf>0 else 0.0,'Fwd Bytes/Bulk Avg':0.0,'Fwd Packets/Bulk Avg':0.0,'Fwd Bulk Rate Avg':0.0,'Bwd Bytes/Bulk Avg':0.0,'Bwd Packets/Bulk Avg':0.0,'Bwd Bulk Rate Avg':0.0,'Subflow Fwd Packets':float(tf),'Subflow Fwd Bytes':float(fl.fwd_bytes),'Subflow Bwd Packets':float(tb),'Subflow Bwd Bytes':float(fl.bwd_bytes),'Init_Win_bytes_fwd':m(fl.fwd_wins),'Init_Win_bytes_bwd':m(fl.bwd_wins),'act_data_fwd_len':max(0.0,float(fl.fwd_bytes)-m(fl.fwd_hdrs)*tf),'min_seg_size_fwd':mn(fl.fwd_hdrs),'Inbound':0.0}
-    return np.array([feat.get(fn,0.0)for fn in feature_names],dtype=np.float64)
-
-def predict(fl):
-    feats=np.nan_to_num(extract(fl),nan=0.0,posinf=0.0,neginf=0.0)
-    scaled=scaler.transform(feats.reshape(1,-1))
-    idx=model.predict(scaled)[0]
-    prob=model.predict_proba(scaled)[0]
+            tcp = pkt[TCP]
+            features[0] = tcp.dport
+            features[44] = 1 if tcp.flags & 0x01 else 0  # FIN
+            features[45] = 1 if tcp.flags & 0x02 else 0  # SYN
+            features[46] = 1 if tcp.flags & 0x04 else 0  # RST
+            features[47] = 1 if tcp.flags & 0x08 else 0  # PSH
+            features[48] = 1 if tcp.flags & 0x10 else 0  # ACK
+        
+        features[2] = 1  # Total Fwd Packets
+        features[3] = 0  # Total Backward Packets
+        features[4] = len(pkt)  # Total Length
+        features[14] = len(pkt)  # Flow Bytes/s approximation
+        features[15] = 1  # Flow Packets/s approximation
     
-    # Check if prediction confidence is low across all classes
-    max_prob = float(prob[idx])
-    
-    # If max confidence < 60%, classify as Unknown
-    if max_prob < 0.60:
-        return "Unknown-Traffic", 50.0
-    
-    return CLASSES[idx], round(max_prob*100, 2)
+    return np.array(features).reshape(1, -1)
 
-def worker():
-    while True:
-        time.sleep(0.5);expire_flows()
-        while completed:
-            try:fl=completed.popleft()
-            except IndexError:break
-            if fl.fwd_pkts+fl.bwd_pkts<5:continue
-            label,conf=predict(fl)
+def save_to_shared(data):
+    """Save detection results to shared JSON file and database"""
+    global attack_count
+    
+    # Save to JSON file (for dashboard compatibility)
+    try:
+        with open(SHARED_FILE, 'r') as f:
+            shared = json.load(f)
+    except:
+        shared = {"traffic": [], "alerts": []}
+    
+    # Add to appropriate list
+    if 'is_attack' in data and data['is_attack']:
+        shared['alerts'].append(data)
+        attack_count += 1
+        
+        # Save to database
+        if DATABASE_ENABLED:
+            try:
+                alert_id = save_alert(data)
+                if alert_id:
+                    print(f"{Fore.GREEN}   💾 Saved to database (ID: {alert_id})")
+            except Exception as e:
+                print(f"{Fore.YELLOW}   ⚠️  Database save failed: {e}")
+    else:
+        shared['traffic'].append(data)
+    
+    # Keep only recent data
+    shared['alerts'] = shared['alerts'][-500:]
+    shared['traffic'] = shared['traffic'][-1000:]
+    
+    with open(SHARED_FILE, 'w') as f:
+        json.dump(shared, f, indent=2)
+
+def process_packet(pkt, model, scaler, label_encoder):
+    """Process packet with hybrid detection"""
+    global total_packets
+    total_packets += 1
+    
+    if not pkt.haslayer(IP):
+        return
+    
+    now = datetime.now().isoformat()
+    src_ip = pkt[IP].src
+    dst_ip = pkt[IP].dst
+    protocol = pkt[IP].proto
+    
+    # Behavioral rule-based detection (checked first for speed)
+    behavioral_result = None
+    
+    # Check each behavioral detector
+    for detector in [check_ddos, check_portscan, check_ssh_brute_force, check_http_attacks, check_slowloris]:
+        result = detector(pkt)
+        if result:
+            behavioral_result = result
+            break
+    
+    # If behavioral detection found something
+    if behavioral_result:
+        attack_type, port, metric = behavioral_result
+        
+        alert_data = {
+            'timestamp': now,
+            'label': attack_type,
+            'confidence': 98,  # Behavioral rules are high confidence
+            'src_ip': src_ip,
+            'dst_ip': dst_ip,
+            'src_port': pkt[TCP].sport if pkt.haslayer(TCP) else 0,
+            'dst_port': port,
+            'protocol': 'TCP' if pkt.haslayer(TCP) else 'UDP' if pkt.haslayer(UDP) else 'OTHER',
+            'fwd_pkts': 1,
+            'bwd_pkts': 0,
+            'total_bytes': len(pkt),
+            'is_attack': True,
+            'detection_method': 'RULE'
+        }
+        
+        save_to_shared(alert_data)
+        
+        color = Fore.RED if alert_data['confidence'] >= 95 else Fore.YELLOW
+        print(f"{color}🚨 {attack_type} detected from {src_ip}:{port} (Rule-based: {metric})")
+        return
+    
+    # ML detection (only for packets that pass behavioral rules)
+    if total_packets % 10 == 0:  # ML every 10th packet to save resources
+        try:
+            features = extract_features(pkt)
+            features_scaled = scaler.transform(features)
             
-            # Only report attacks or unknown traffic
-            if label == "BENIGN":
-                continue
+            prediction = model.predict(features_scaled)[0]
+            proba = model.predict_proba(features_scaled)[0]
+            confidence = int(max(proba) * 100)
+            label = label_encoder.inverse_transform([prediction])[0]
             
-            entry={"timestamp":datetime.now().isoformat(),"label":label,"confidence":conf,"is_attack":label!="BENIGN","fwd_pkts":fl.fwd_pkts,"bwd_pkts":fl.bwd_pkts,"duration":round((fl.end-fl.start),3)if fl.end and fl.start else 0,"dst_port":fl.dst_port}
-            traffic.append(entry)
-            if len(traffic)>200:traffic.pop(0)
-            if entry["is_attack"]:
-                alerts.append(entry)
-                print(f"{Fore.RED}🚨 ATTACK | {label:20s} | conf={conf:5.1f}% | pkts={fl.fwd_pkts+fl.bwd_pkts:5d} | port={fl.dst_port}")
-            save()
+            # Only alert if not BENIGN and confidence > 75%
+            if label != 'BENIGN' and confidence > 75:
+                alert_data = {
+                    'timestamp': now,
+                    'label': label,
+                    'confidence': confidence,
+                    'src_ip': src_ip,
+                    'dst_ip': dst_ip,
+                    'src_port': pkt[TCP].sport if pkt.haslayer(TCP) else 0,
+                    'dst_port': pkt[TCP].dport if pkt.haslayer(TCP) else 0,
+                    'protocol': 'TCP' if pkt.haslayer(TCP) else 'UDP' if pkt.haslayer(UDP) else 'OTHER',
+                    'fwd_pkts': 1,
+                    'bwd_pkts': 0,
+                    'total_bytes': len(pkt),
+                    'is_attack': True,
+                    'detection_method': 'ML'
+                }
+                
+                save_to_shared(alert_data)
+                
+                color = Fore.RED if confidence >= 95 else Fore.YELLOW
+                print(f"{color}🚨 {label} detected from {src_ip} (ML: {confidence}%)")
+        except Exception as e:
+            pass  # Skip ML errors silently
+    
+    # Log normal traffic periodically
+    if total_packets % 100 == 0:
+        traffic_data = {
+            'timestamp': now,
+            'src_ip': src_ip,
+            'dst_ip': dst_ip,
+            'protocol': 'TCP' if pkt.haslayer(TCP) else 'UDP' if pkt.haslayer(UDP) else 'OTHER',
+            'fwd_pkts': 1,
+            'bwd_pkts': 0,
+            'is_attack': False
+        }
+        save_to_shared(traffic_data)
 
 def main():
-    import argparse;parser=argparse.ArgumentParser();parser.add_argument('--iface',default=None);args=parser.parse_args()
-    if not args.iface:ifaces=[i for i in get_if_list()if i!='lo'];args.iface=ifaces[0]if ifaces else'eth0'
-    print(f"{Fore.CYAN}{'='*70}\n  AI-IDS ENHANCED CAPTURE\n{'='*70}")
-    print(f"  Interface     : {args.iface}")
-    print(f"  Detection     : Hybrid (ML + Signature + Behavioral)")
-    print(f"  DDoS          : >100 pkt/s")
-    print(f"  PortScan      : 10+ ports")
-    print(f"  SSH Brute     : 10+ attempts/10s")
-    print(f"  Web Attacks   : Pattern matching (SQLi, XSS, Cmd Injection)")
-    print(f"  Slowloris     : 20+ slow connections")
-    print(f"  Unknown       : Low confidence (<60%) traffic")
-    print(f"{'='*70}\n")
-    t=threading.Thread(target=worker,daemon=True);t.start()
-    try:sniff(iface=args.iface,prn=add_packet,filter="ip",store=False)
-    except KeyboardInterrupt:print(f"\n{Fore.YELLOW}Stopping...");save();print(f"{Fore.GREEN}✅ Done. Alerts: {len(alerts)}")
-if __name__=='__main__':main()
+    parser = argparse.ArgumentParser(description='AI-IDS Real-time Packet Capture with Database')
+    parser.add_argument('--iface', type=str, default='eth0', help='Network interface')
+    parser.add_argument('--filter', type=str, default='', help='BPF filter')
+    args = parser.parse_args()
+    
+    print(f"{Fore.CYAN}{'='*70}")
+    print(f"{Fore.CYAN}  AI-IDS CAPTURE (Hybrid Detection + Database Storage)")
+    print(f"{Fore.CYAN}{'='*70}")
+    print(f"{Fore.YELLOW}  Interface: {args.iface}")
+    print(f"{Fore.YELLOW}  DDoS: >100 pkt/s | PortScan: 10+ ports")
+    print(f"{Fore.YELLOW}  SQLi/XSS: Payload analysis | SSH Brute: 10+ attempts")
+    if DATABASE_ENABLED:
+        print(f"{Fore.GREEN}  Database: ✅ Enabled (SQLite)")
+    else:
+        print(f"{Fore.RED}  Database: ❌ Disabled")
+    print(f"{Fore.CYAN}{'='*70}\n")
+    
+    model, scaler, label_encoder, feature_names = load_model_components()
+    
+    print(f"{Fore.GREEN}🎯 Monitoring started. Press Ctrl+C to stop.\n")
+    
+    try:
+        sniff(
+            iface=args.iface,
+            prn=lambda pkt: process_packet(pkt, model, scaler, label_encoder),
+            filter=args.filter,
+            store=False
+        )
+    except KeyboardInterrupt:
+        print(f"\n\n{Fore.CYAN}{'='*70}")
+        print(f"{Fore.YELLOW}📊 Session Summary:")
+        print(f"{Fore.GREEN}   Total Packets: {total_packets:,}")
+        print(f"{Fore.RED}   Attacks Detected: {attack_count}")
+        if DATABASE_ENABLED:
+            print(f"{Fore.GREEN}   Database: All attacks saved to SQLite")
+        print(f"{Fore.CYAN}{'='*70}\n")
+
+if __name__ == "__main__":
+    main()

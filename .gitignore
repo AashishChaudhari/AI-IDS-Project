@@ -1,42 +1,41 @@
-venv/
+# Python
 __pycache__/
-*.pyc
-*.pyo
-*.npy
-*.pkl
-*.keras
-data/raw/
-data/live_results.json
-reports/*.pdf
-docs/visualizations/*.png
-.DS_Store
-.idea/
-.vscode/
-*.swp
-config/
-*.pyc
-__pycache__/
-# Sensitive configurations
-config/email_config.json
-
-# Python cache
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
+*.py[cod]
+*$py.class
+*.so
 .Python
-
-# Virtual environment
 venv/
 env/
+*.egg-info/
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+data/ids_database.db
+
+# Sensitive configs
+config/email_config.json
+
+# Large data files
+data/raw/
+data/processed/*.npy
+data/processed/*.pkl
+data/geoip/
+
+# Reports and outputs
+reports/*.pdf
+*.log
 
 # IDE
 .vscode/
 .idea/
+*.swp
 
-# Reports and temporary files
-reports/*.pdf
-reports/temp/
+# OS
+.DS_Store
+Thumbs.db
 
-# Data files
-data/live_results.json
+# Temporary files
+*.tmp
+.cache/
